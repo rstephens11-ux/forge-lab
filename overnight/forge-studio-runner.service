@@ -1,0 +1,26 @@
+[Unit]
+Description=Forge Lab Studio overnight runner (briefs -> shorts, headless)
+Documentation=file:///home/ryan/forge-studio/overnight/runner.py
+After=network-online.target comfyui.service ollama.service
+Wants=network-online.target
+# comfyui and ollama are wanted, not required: the runner re-checks the ComfyUI queue
+# before every brief, so a brief queued while ComfyUI is down simply waits.
+
+[Service]
+Type=simple
+User=ryan
+WorkingDirectory=/home/ryan/forge-studio
+Environment=FORGE_LAB_DATA=/home/ryan/forge-studio-data
+Environment=FORGE_URL=http://127.0.0.1:8188
+Environment=DIRECTOR_URL=http://127.0.0.1:11434
+Environment=FORGE_AUDIO_LOCAL=1
+Environment=PYTHONUNBUFFERED=1
+ExecStart=/usr/bin/python3 /home/ryan/forge-studio/overnight/runner.py
+Restart=on-failure
+RestartSec=15
+# a stuck ComfyUI call must not wedge the daemon forever
+TimeoutStopSec=30
+KillMode=mixed
+
+[Install]
+WantedBy=multi-user.target

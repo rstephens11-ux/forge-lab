@@ -1,0 +1,49 @@
+# Forge Lab — private local repo.
+# Rule: version the CODE, the DOCS and the small PLANS. Leave out generated media and
+# build output — they are big (runs/ 187M, drafts/ 73M, episodes/ 130M, dist/ 56M) and
+# fully regenerable from the code. If a run's media ever needs keeping, copy it somewhere
+# deliberate rather than committing it.
+
+# ---- build + interpreter noise ----
+__pycache__/
+*.pyc
+*.pyo
+dist/
+build/
+_backups/
+*.log
+.DS_Store
+.venv/
+
+# ---- generated media (by extension, so the PLANS beside it stay versioned) ----
+# episodes/ holds long-video plans (plan.json) next to their takes: keep the plans, drop
+# the media. Same reasoning for runs/ and drafts/.
+*.mp4
+*.mov
+*.mkv
+*.wav
+*.mp3
+*.m4a
+*.gif
+episodes/**/*.png
+runs/**/*.png
+runs/**/*.json
+drafts/**/*.png
+drafts/**/*.html
+drafts/**/*.jpg
+
+# ---- reference assets uploaded to forge (binary, bulky, re-pickable) ----
+inputs/
+
+# ---- local-only state ----
+forge_host.txt
+forge_lab_errors.log
+polish_debug.log
+wheel_debug.log
+/*.png
+episodes/test*/
+
+# ---- characters/: same shape as episodes/ — KEEP character.json (a small plan, worth
+# versioning: it is the identity block + seed + LoRA), DROP the still (media, re-pickable).
+characters/**/*.png
+characters/**/*.jpg
