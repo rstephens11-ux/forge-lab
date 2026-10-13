@@ -2,7 +2,7 @@
 
 A macOS desktop app (tkinter) that drives image, video, music and voice models on a home GPU server, a dual RTX 3090 Ubuntu box I built, running ComfyUI and Ollama.
 
-I'm not a software engineer. I'm an internal auditor, and I built this with AI coding agents (mostly [Hermes Agent](https://github.com/NousResearch/hermes-agent)) doing the typing while I directed, tested and decided. It's public because the way it was built is the interesting part, not because it's a polished product.
+I'm not a software engineer. I'm an internal auditor, and I built this with AI coding agents (mostly [Hermes Agent](https://github.com/NousResearch/hermes-agent)) doing the typing while I directed, tested and decided. It's public because the way it was built is the interesting part, not because it's a polished product. shout out @bonegpt for the inspo with Slop Cannon, wanted to make a local version that cost me no credits. 
 
 ## What it does
 
