@@ -24,9 +24,14 @@ HTTP POST to `/prompt`. Two files carry that:
 token is present, so the app still runs against a plain ComfyUI. **The SDK path is the one it is
 built for and the one the demo shows.**
 
-**Open weights only.** Nothing here calls a closed model API: images are Qwen-Image, video is
-MiniMax H3 / Wan 2.2 / LTX, songs are YuE2, voices are Qwen3-TTS and Fish S2-Pro — all running
-locally on the 3090s.
+**Open weights only, for everything that renders.** Images are Qwen-Image, video is MiniMax H3 /
+Wan 2.2 / LTX, songs are YuE2, voices are Qwen3-TTS and Fish S2-Pro — all running locally on the
+3090s.
+
+The one optional exception is the **Writer**, which drafts *text*, not media: it defaults to
+**Ollama on the rig**, and the hosted presets in `director.py` (Anthropic, OpenAI, OpenRouter,
+Nous) are opt-in — they do nothing unless you set a key in the environment or in a git-ignored
+`writer_keys.json`. **No keys are in this repository**, and no render path touches them.
 
 ## What it does
 
