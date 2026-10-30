@@ -1,0 +1,201 @@
+{
+ "vae": {
+  "class_type": "VAELoader",
+  "inputs": {
+   "vae_name": "minimax_h3_video_vae_int8_convrot.safetensors"
+  }
+ },
+ "avae": {
+  "class_type": "VAELoader",
+  "inputs": {
+   "vae_name": "minimax_h3_audio_vae_fp32.safetensors"
+  }
+ },
+ "clip": {
+  "class_type": "CLIPLoader",
+  "inputs": {
+   "clip_name": "qwen3vl_32b_minimax_h3_nvfp4_awq.safetensors",
+   "type": "minimax",
+   "device": "default"
+  }
+ },
+ "unet": {
+  "class_type": "UNETLoader",
+  "inputs": {
+   "unet_name": "minimax_h3_ref2va_pruned_int8_convrot.safetensors",
+   "weight_dtype": "default"
+  }
+ },
+ "sel": {
+  "class_type": "KSamplerSelect",
+  "inputs": {
+   "sampler_name": "res_multistep"
+  }
+ },
+ "noise": {
+  "class_type": "RandomNoise",
+  "inputs": {
+   "noise_seed": 804281649
+  }
+ },
+ "sched": {
+  "class_type": "BasicScheduler",
+  "inputs": {
+   "scheduler": "simple",
+   "steps": 4,
+   "denoise": 1.0,
+   "model": [
+    "chan2",
+    0
+   ]
+  }
+ },
+ "guider": {
+  "class_type": "BasicGuider",
+  "inputs": {
+   "model": [
+    "chan2",
+    0
+   ],
+   "conditioning": [
+    "cond",
+    0
+   ]
+  }
+ },
+ "samp": {
+  "class_type": "SamplerCustomAdvanced",
+  "inputs": {
+   "noise": [
+    "noise",
+    0
+   ],
+   "guider": [
+    "guider",
+    0
+   ],
+   "sampler": [
+    "sel",
+    0
+   ],
+   "sigmas": [
+    "sched",
+    0
+   ],
+   "latent_image": [
+    "cond",
+    1
+   ]
+  }
+ },
+ "vdec": {
+  "class_type": "VAEDecode",
+  "inputs": {
+   "samples": [
+    "samp",
+    0
+   ],
+   "vae": [
+    "vae",
+    0
+   ]
+  }
+ },
+ "mkvid": {
+  "class_type": "CreateVideo",
+  "inputs": {
+   "fps": 24.0,
+   "images": [
+    "vdec",
+    0
+   ],
+   "bit_depth": 8,
+   "color_space": "sRGB",
+   "codec": "none",
+   "audio": [
+    "adec",
+    0
+   ]
+  }
+ },
+ "save": {
+  "class_type": "SaveVideo",
+  "inputs": {
+   "video": [
+    "mkvid",
+    0
+   ],
+   "filename_prefix": "video/forge_lab",
+   "format": "auto",
+   "format.codec": "auto",
+   "codec": "auto"
+  }
+ },
+ "adec": {
+  "class_type": "VAEDecodeAudio",
+  "inputs": {
+   "samples": [
+    "samp",
+    0
+   ],
+   "vae": [
+    "avae",
+    0
+   ]
+  }
+ },
+ "chan": {
+  "class_type": "LoraLoaderModelOnly",
+  "inputs": {
+   "lora_name": "minimax_h3_ref2v_turbo_4step_v0.1_comfyui_bf16.safetensors",
+   "strength_model": 1.0,
+   "model": [
+    "unet",
+    0
+   ]
+  }
+ },
+ "chan2": {
+  "class_type": "LoraLoaderModelOnly",
+  "inputs": {
+   "lora_name": "character_lora_v1.safetensors",
+   "strength_model": 1.0,
+   "model": [
+    "chan",
+    0
+   ]
+  }
+ },
+ "cond": {
+  "class_type": "MiniMaxH3ReferenceToVideo",
+  "inputs": {
+   "clip": [
+    "clip",
+    0
+   ],
+   "prompt": "<Picture 1> is the character. He walks toward camera.",
+   "width": 1344,
+   "height": 768,
+   "length": 362,
+   "ref_image_size": "match",
+   "vae": [
+    "vae",
+    0
+   ],
+   "audio_vae": [
+    "avae",
+    0
+   ],
+   "ref_images.ref_image_1": [
+    "load1",
+    0
+   ]
+  }
+ },
+ "load1": {
+  "class_type": "LoadImage",
+  "inputs": {
+   "image": "avery-face-ref-canon.png"
+  }
+ }
+}

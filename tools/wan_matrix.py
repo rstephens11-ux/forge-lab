@@ -159,7 +159,7 @@ print("\n" + "=" * 78)
 print("RAYLIGHT 2-GPU — the SAME graph, transformed; the 1-card path must be untouched")
 print("=" * 78)
 _RK = dict(prompt="x", refs=[], length=124, width=544, height=736, steps=4, seed=42,
-           lora="character_lora_v2.safetensors", turbo=True)
+           lora="character_lora_v1.safetensors", turbo=True)
 _g1 = fl.h3_graph("i2v", **_RK)                 # default gpus=1 = today's path
 _g2 = fl.h3_graph("i2v", gpus=2, **_RK)
 _c1 = {v["class_type"] for v in _g1.values()}
@@ -226,7 +226,7 @@ print("WAN 2.2 S2V — audio-DRIVEN. ONE path, and the chaining rules")
 print("=" * 78)
 S2V_KEYS = ("steps", "shift", "cfg", "lora", "turbo")
 for n_chunks in (1, 2, 3):
-    p = {"wan_mode": "s2v", "ref_names": ["alice.png"], "audio_name": "song.wav",
+    p = {"wan_mode": "s2v", "ref_names": ["avery.png"], "audio_name": "song.wav",
          "s2v_chunks": n_chunks, "width": 640, "height": 640, "prompt": "he sings"}
     g, _seed = fl.build_graph("wan", p)
     print("\ns2v / %d chunk(s)" % n_chunks)

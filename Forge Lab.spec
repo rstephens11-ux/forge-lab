@@ -1,12 +1,20 @@
 # -*- mode: python ; coding: utf-8 -*-
+# The Comfy SDK route (comfy_route.py) imports comfy_sdk inside functions, so PyInstaller
+# can't see it: name the SDK and its transport. Absent SDK = the build still works and the
+# app sends renders directly (comfy_route.enabled() is False).
+from PyInstaller.utils.hooks import collect_submodules
+try:
+    _sdk_mods = collect_submodules('comfy_sdk') + collect_submodules('comfy_low')
+except Exception:
+    _sdk_mods = []
 
 
 a = Analysis(
     ['forge_lab.py'],
     pathex=['.', 'audio'],
     binaries=[],
-    datas=[('audio/rig_tts.py', 'audio'), ('audio/rig_align.py', 'audio'), ('audio/rig_asr.py', 'audio'), ('audio/rig_dialogue.py','audio'), ('audio/rig_asr_batch.py','audio')],
-    hiddenimports=['forge_lab', 'forge_core', 'studio_pipeline', 'charpack', 'director', 'client', 'song', 'audio.client', 'dialogue', 'dialogue_ui'],
+    datas=[('audio/rig_tts.py', 'audio'), ('audio/rig_align.py', 'audio'), ('audio/rig_asr.py', 'audio'), ('audio/rig_dialogue.py','audio'), ('audio/rig_asr_batch.py','audio'), ('audio/rig_fish.py','audio'), ('assets/fonts/Inter-Black.otf', 'assets/fonts'), ('assets/fonts/OFL-Inter.txt', 'assets/fonts')],
+    hiddenimports=['forge_lab', 'forge_core', 'studio_pipeline', 'charpack', 'director', 'client', 'song', 'audio.client', 'dialogue', 'dialogue_ui', 'characters_ui', 'episode_ui', 'cards', 'cards_ui', 'weirdos', 'char_vocab', 'scene_engine', 'dialogue2_ui', 'voicelab', 'voices_ui', 'formats', 'quick', 'quick_ui', 'apps', 'apps_ui', 'writers_room', 'places', 'places_ui', 'dock', 'music', 'export_pack', 'nightshift', 'previews', 'series', 'licences', 'beats', 'finish', 'sfx', 'char_styles', 'comfy_route', 'picture_inbox', 'jobqueue', 'home_queue', 'home_page', 'dispatch'] + _sdk_mods,
     hookspath=[],
     hooksconfig={},
     runtime_hooks=[],

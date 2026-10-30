@@ -337,6 +337,228 @@ STYLE_PRESETS = [
      "programmed double-kick, shouted male vocal, cold machine production"),
 ]
 
+# ---------------------------------------------------------------------------------------
+# SOUND FAMILIES (2026-10-17). Ryan: "there should be more options for song sounds,
+# including alt girl r&b futuristic type". Every sound follows STYLE_RECIPE and names its
+# VOCAL clause separately, so the window's Voice switch (female / male / duet / no vocals)
+# can swap ONLY that part of the line. No artist names: YuE2 does not know them, and the
+# words that describe the sound are what it actually follows. Family 1 is Ryan's own lanes
+# (STYLE_PRESETS, unchanged, so every existing test and saved song still matches).
+# ---------------------------------------------------------------------------------------
+def _snd(name, genre, bpm, vocal, instruments, production, lang="English"):
+    """One sound -> (name, style text, vocal clause). Built from the recipe's parts."""
+    parts = [lang, genre, "%d BPM" % bpm] if bpm else [lang, genre]
+    if vocal:
+        parts.append(vocal)
+    parts += [instruments, production]
+    return (name, ", ".join(p for p in parts if p), vocal)
+
+
+_LANES_VOCAL = {        # the vocal clause inside each of Ryan's original 8 lines
+    "Retro-futurist synth": "male vocal with a slight vocoder edge",
+    "Maine folk / Americana": "warm male vocal",
+    "90s alt rock": "gritty male vocal",
+    "Cinematic orchestral": "soaring female vocal",
+    "Gospel / hymn": "four-part choir",
+    "Country road": "male vocal with a story-teller's phrasing",
+    "Lo-fi study": "no vocals",
+    "Industrial metal": "shouted male vocal",
+}
+
+SOUND_FAMILIES = [
+    ("Your lanes", [(n, t, _LANES_VOCAL.get(n, "")) for n, t in STYLE_PRESETS]),
+    ("R&B / Soul", [
+        _snd("Alt-girl future R&B", "futuristic alternative R&B", 86,
+             "airy breathy female vocal with stacked harmonies and pitched-up ad-libs",
+             "glassy synth pads, deep sub-bass 808s, glitchy stuttered hi-hats, reversed "
+             "vocal chops", "dark glossy spacious production with shimmering chorus FX"),
+        _snd("Neo-soul slow jam", "neo-soul", 72,
+             "silky soulful female vocal with melismatic runs",
+             "Rhodes electric piano, warm bass guitar, lazy behind-the-beat drums, muted "
+             "guitar licks", "warm analog tape production"),
+        _snd("90s R&B groove", "90s contemporary R&B", 94,
+             "smooth male vocal with falsetto backing harmonies",
+             "swung drum machine, synth bass, finger snaps, bell keys",
+             "polished glossy radio production"),
+        _snd("Dark trap-soul", "dark trap soul", 70,
+             "moody melodic male vocal with autotune", "booming 808s, rattling hi-hats, "
+             "minor piano loop, atmospheric pads", "heavy wet late-night production"),
+        _snd("Bedroom R&B", "bedroom R&B", 80,
+             "intimate whispery female vocal, close-miked",
+             "soft guitar loop, muffled drums, warm sub bass, vinyl hiss",
+             "lo-fi intimate home-studio production"),
+        _snd("Motown soul", "60s Motown soul", 118,
+             "big joyful male lead with call-and-response backing singers",
+             "tambourine, bright horns, walking bass, four-on-the-floor drums",
+             "vintage mono-flavoured live-room production"),
+    ]),
+    ("Pop", [
+        _snd("Glossy synth-pop", "glossy synth-pop", 116, "bright confident female vocal",
+             "punchy drum machine, plucky synths, octave bass, big chorus hooks",
+             "sparkling modern radio production"),
+        _snd("Hyperpop", "hyperpop", 160, "pitched-up chipmunk female vocal with heavy "
+             "autotune", "distorted supersaw synths, glitchy breakbeats, blown-out 808s",
+             "chaotic maximal overdriven production"),
+        _snd("Dream pop", "dream pop", 92, "hazy reverb-soaked female vocal",
+             "shimmering chorused guitars, soft synth pads, simple drum machine",
+             "washed-out dreamy production"),
+        _snd("Bubblegum K-pop", "K-pop dance-pop", 124, "bright group vocals trading lines",
+             "EDM synth drops, crisp claps, slap bass", "high-gloss maximal production"),
+        _snd("Piano ballad", "pop piano ballad", 68, "emotional male vocal, breaking on the "
+             "high notes", "grand piano, soft string swells", "intimate then soaring production"),
+        _snd("Indie bedroom pop", "indie bedroom pop", 100, "soft deadpan female vocal",
+             "jangly guitar, toy keyboard, simple drum machine", "charming lo-fi production"),
+    ]),
+    ("Hip hop", [
+        _snd("Boom bap", "90s boom bap hip hop", 90, "confident male rap verses",
+             "dusty sampled drums, chopped soul sample, upright bass", "gritty vinyl production"),
+        _snd("Trap banger", "trap", 140, "aggressive male rap with ad-libs",
+             "booming 808s, rolling hi-hats, dark bell melody", "loud punchy modern production"),
+        _snd("Jazzy hip hop", "jazz rap", 88, "laid-back female rap",
+             "muted trumpet, walking bass, brushed drums, Rhodes", "smoky warm production"),
+        _snd("Drill", "UK drill", 142, "cold half-spoken male rap",
+             "sliding 808 bass, skittering hats, ominous strings", "dark sparse production"),
+        _snd("Cartoon rap", "playful novelty hip hop", 100, "goofy animated male rap",
+             "bouncy tuba bass, hand claps, cartoon sound effects",
+             "bright cheeky Saturday-morning production"),
+    ]),
+    ("Electronic", [
+        _snd("Deep house", "deep house", 122, "soulful female vocal hook",
+             "four-on-the-floor kick, warm chords, rolling bassline",
+             "smooth late-night club production"),
+        _snd("Drum & bass", "liquid drum and bass", 174, "floating female vocal",
+             "fast breakbeats, deep reese bass, lush pads", "wide crisp production"),
+        _snd("Darkwave", "darkwave", 118, "cold detached male baritone vocal",
+             "analog synth bass, gated drum machine, icy arpeggios", "gothic 80s production"),
+        _snd("Vaporwave", "vaporwave", 80, "slowed chopped female vocal sample",
+             "detuned 80s synths, smooth sax, mall-muzak chords",
+             "hazy nostalgic slowed-down production"),
+        _snd("Chiptune", "chiptune", 150, "no vocals", "8-bit square-wave leads, noise-channel "
+             "drums, arpeggiated bass", "retro video-game production"),
+        _snd("Ambient", "ambient electronic", 0, "no vocals",
+             "evolving synth pads, field recordings, soft granular textures",
+             "vast slow cinematic production"),
+    ]),
+    ("Rock / Alt", [
+        _snd("Indie rock", "indie rock", 128, "earnest male vocal",
+             "jangly electric guitars, driving bass, tight live drums",
+             "bright garage-room production"),
+        _snd("Shoegaze", "shoegaze", 110, "buried dreamy female vocal",
+             "walls of fuzzed reverb guitars, droning bass, washy drums",
+             "dense loud blurred production"),
+        _snd("Pop punk", "pop punk", 170, "snotty energetic male vocal with gang shouts",
+             "palm-muted power chords, fast punk drums, bright bass",
+             "tight loud early-2000s production"),
+        _snd("Garage blues", "garage blues rock", 112, "raw howling male vocal",
+             "fuzz guitar riff, stomping drums, no bass", "raw two-piece live production"),
+        _snd("Grunge", "90s grunge", 100, "growling then screaming male vocal",
+             "sludgy detuned guitars, heavy bass, pounding drums", "murky raw production"),
+    ]),
+    ("Folk / Country", [
+        _snd("Sea shanty", "sea shanty", 100, "rough male group vocals, call and response",
+             "stomps, claps, accordion, fiddle", "rowdy live tavern production"),
+        _snd("Bluegrass", "bluegrass", 132, "high lonesome male vocal with harmony",
+             "banjo, mandolin, fiddle, upright bass, flat-picked guitar",
+             "bright live porch production"),
+        _snd("Indie folk", "indie folk", 84, "soft hushed duet vocals",
+             "fingerpicked acoustic guitar, banjo, gentle strings", "warm intimate production"),
+        _snd("Outlaw country", "outlaw country", 104, "gravelly baritone male vocal",
+             "twangy telecaster, pedal steel, shuffle drums", "dusty 70s production"),
+        _snd("Celtic", "Celtic folk", 120, "clear bright female vocal",
+             "tin whistle, bodhrán, fiddle, bouzouki", "lively pub-session production"),
+    ]),
+    ("Cinematic", [
+        _snd("Epic trailer", "epic trailer music", 90, "huge wordless choir",
+             "massive taiko drums, brass stabs, rising strings, braams",
+             "colossal blockbuster production"),
+        _snd("Spaghetti western", "spaghetti western score", 96,
+             "lonely whistled melody and wordless male chant",
+             "twangy reverb guitar, trumpet, whip cracks, chimes",
+             "widescreen dusty production"),
+        _snd("Noir jazz score", "film noir jazz", 70, "no vocals",
+             "muted trumpet, brushed drums, double bass, smoky saxophone",
+             "dark rainy-city production"),
+        _snd("Whimsical fairytale", "whimsical orchestral", 108, "no vocals",
+             "pizzicato strings, celesta, bassoon, glockenspiel", "storybook production"),
+        _snd("Sci-fi synth score", "sci-fi synth score", 84, "no vocals",
+             "pulsing analog synths, deep drones, metallic hits",
+             "cold vast retro-future production"),
+    ]),
+    ("Jazz / Lounge", [
+        _snd("Smoky jazz club", "late-night jazz ballad", 66, "sultry smoky female vocal",
+             "brushed drums, upright bass, piano trio, tenor sax", "intimate club production"),
+        _snd("Bossa nova", "bossa nova", 120, "soft breathy duet vocals",
+             "nylon guitar, light shaker, upright bass, flute", "sunny relaxed production"),
+        _snd("Swing big band", "swing big band", 160, "crooning male vocal",
+             "full horn section, walking bass, ride cymbal swing",
+             "vintage ballroom production"),
+        _snd("Lounge exotica", "60s lounge exotica", 100, "wordless female ooh vocals",
+             "vibraphone, bongos, organ, hollow-body guitar", "kitschy retro hi-fi production"),
+    ]),
+    ("World", [
+        _snd("Afrobeats", "afrobeats", 104, "melodic male vocal with chant backing",
+             "log drums, shakers, syncopated guitar, warm bass",
+             "sunny bouncy modern production"),
+        _snd("Reggaeton", "reggaeton", 94, "smooth Spanish-language male vocal",
+             "dembow beat, deep bass, plucky synth", "glossy club production",
+             lang="Spanish"),
+        _snd("City pop", "Japanese city pop", 112, "bright female vocal",
+             "slap bass, glossy Rhodes, brass hits, funky guitar",
+             "polished 80s Tokyo production", lang="Japanese"),
+        _snd("Balkan brass", "Balkan brass band", 140, "rowdy male group shouts",
+             "trumpets, tuba, clarinet, snare and bass drum", "wild wedding-party production"),
+        _snd("Polka", "Central European polka", 120, "cheerful male vocal",
+             "accordion, oom-pah tuba, clarinet, snare", "village-dance production"),
+    ]),
+    ("Cartoon / Comedy", [
+        _snd("Show theme song", "upbeat cartoon theme song", 132,
+             "enthusiastic mixed group vocals", "bright brass, bouncy bass, snappy drums, "
+             "glockenspiel", "punchy Saturday-morning TV production"),
+        _snd("Deadpan crooner", "deadpan lounge crooner ballad", 72,
+             "dry serious baritone, utterly sincere", "string section, harp glissandos, "
+             "soft brushed drums", "over-the-top 1950s film production"),
+        _snd("Villain song", "theatrical villain song", 100, "menacing male baritone with "
+             "chorus", "pipe organ, low brass, timpani, harpsichord",
+             "grand musical-theatre production"),
+        _snd("Jingle", "retro TV jingle", 120, "chirpy mixed vocals",
+             "ukulele, whistling, hand claps, xylophone", "bright 1960s ad production"),
+        _snd("Opera parody", "mock-operatic aria", 76, "huge melodramatic tenor",
+             "full orchestra, timpani rolls", "grand concert-hall production"),
+    ]),
+]
+
+VOICE_SWITCH = {        # the Voice switch: what replaces a sound's vocal clause
+    "as the sound": None,
+    "female": "expressive female vocal",
+    "male": "expressive male vocal",
+    "duet": "male and female duet vocals",
+    "no vocals": "no vocals",
+}
+
+
+def all_sounds():
+    """[(family, name, text, vocal)] — every built-in sound, in display order."""
+    return [(fam, n, t, v) for fam, items in SOUND_FAMILIES for n, t, v in items]
+
+
+def find_sound(name):
+    for fam, n, t, v in all_sounds():
+        if n == name:
+            return fam, t, v
+    return None
+
+
+def with_voice(text, vocal, voice):
+    """Swap ONLY the vocal clause of a sound line for the Voice switch's choice.
+    'as the sound' (None) leaves the line alone; an unknown clause is appended, not lost."""
+    rep = VOICE_SWITCH.get(voice)
+    if rep is None:
+        return text
+    if vocal and vocal in text:
+        return text.replace(vocal, rep, 1)
+    return text.rstrip(", ") + ", " + rep
+
+
 HOW_TO_WRITE = (
     "STYLE is the band and the room: language, genre, vocal, tempo, instruments, production. "
     "LYRICS are only the words to be sung, in [Verse] / [Chorus] / [Bridge] / [Outro] blocks. "

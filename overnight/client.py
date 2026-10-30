@@ -20,7 +20,7 @@ import subprocess
 import sys
 import time
 
-HOST = os.environ.get("FORGE_SSH", "ryan@forge")
+HOST = os.environ.get("FORGE_SSH", "name@forge")
 REMOTE_DATA = os.environ.get("FORGE_STUDIO_DATA", "/home/ryan/forge-studio-data")
 ODIR = REMOTE_DATA + "/overnight"
 QUEUE = ODIR + "/queue"

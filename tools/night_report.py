@@ -142,7 +142,7 @@ def main(argv=None):
     with open(rp, "w") as f:
         f.write("\n".join(h))
 
-    print("\n=== SUMMARY ===")
+    print("\n=== SUMROBIN ===")
     for r in rows:
         print("%-52s %sx%s %6.2fs fps=%-5s audio=%-4s %sMB" %
               (os.path.basename(r["file"]), r.get("w"), r.get("h"), r.get("seconds") or 0,

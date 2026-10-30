@@ -37,6 +37,13 @@ import urllib.error
 import urllib.parse
 import urllib.request
 
+# ⚠️ An .app opened from Finder / the Dock gets launchd's PATH (/usr/bin:/bin:/usr/sbin:/sbin),
+# which has NO Homebrew - so every "ffmpeg" call failed with FileNotFoundError and Quick died at
+# the edit (2026-10-19, two runs). Add the Homebrew bins at import, after anything already there.
+for _bin in ("/opt/homebrew/bin", "/usr/local/bin"):
+    if os.path.isdir(_bin) and _bin not in os.environ.get("PATH", "").split(os.pathsep):
+        os.environ["PATH"] = os.environ.get("PATH", "") + os.pathsep + _bin
+
 # ⚠️ FORGE_LAB_DATA lets a headless process (the rig, a test harness) point at its
 # OWN data dir. Default unchanged; RUNS/HOSTFILE/CHARACTERS all derive from DATA below.
 DATA = os.path.expanduser(os.environ.get("FORGE_LAB_DATA") or "~/forge-lab")
@@ -55,7 +62,7 @@ CANDIDATES = [u.rstrip("/") for u in [
     "http://forge:8188",
     "http://forge.local:8188",
 ] if u]
-SSH_TARGET = os.environ.get("FORGE_SSH", "ryan@forge")
+SSH_TARGET = os.environ.get("FORGE_SSH", "name@forge")
 
 # ComfyUI streams step progress ONLY to the websocket that submitted the prompt,
 # so this id must match at submit time. Deriving it per launch also stops a stale
@@ -134,6 +141,99 @@ QWEN_EDIT = {
                                                   "filename_prefix": "forge_lab"}},
 }
 
+# --- Krea 2 / FLUX 3: PLAIN flow models ------------------------------------------------------
+# UNETLoader + CLIPLoader + a normal CLIPTextEncode -> KSampler -> VAEDecode. NOT the Qwen
+# shape: TextEncodeQwenImage21 takes prompt/negative_prompt/resolution and emits a latent,
+# where these take one "text". Hence their own template AND their own build_graph branch.
+KREA2_T2I = {
+    "1": {"class_type": "UNETLoader",
+          "inputs": {"unet_name": "krea2_turbo_int8_convrot.safetensors",
+                     "weight_dtype": "default"}},
+    "2": {"class_type": "CLIPLoader",
+          "inputs": {"clip_name": "qwen3vl_4b_fp8_scaled.safetensors", "type": "krea2"}},
+    "3": {"class_type": "VAELoader",
+          "inputs": {"vae_name": "qwen_image_vae.safetensors"}},
+    "4": {"class_type": "CLIPTextEncode", "inputs": {"clip": ["2", 0], "text": ""}},
+    "5": {"class_type": "CLIPTextEncode", "inputs": {"clip": ["2", 0], "text": ""}},
+    "6": {"class_type": "EmptyLatentImage",
+          "inputs": {"width": 1024, "height": 1024, "batch_size": 1}},
+    "7": {"class_type": "KSampler",
+          "inputs": {"model": ["1", 0], "positive": ["4", 0], "negative": ["5", 0],
+                     "latent_image": ["6", 0], "seed": 0, "steps": 8, "cfg": 1.0,
+                     "sampler_name": "euler", "scheduler": "simple", "denoise": 1.0}},
+    "8": {"class_type": "VAEDecode", "inputs": {"samples": ["7", 0], "vae": ["3", 0]}},
+    "9": {"class_type": "SaveImage", "inputs": {"images": ["8", 0],
+                                                "filename_prefix": "forge_lab"}},
+}
+KREA2_RAW_T2I = {
+    "1": {"class_type": "UNETLoader",
+          "inputs": {"unet_name": "krea2_raw_int8_convrot.safetensors",
+                     "weight_dtype": "default"}},
+    "2": {"class_type": "CLIPLoader",
+          "inputs": {"clip_name": "qwen3vl_4b_fp8_scaled.safetensors", "type": "krea2"}},
+    "3": {"class_type": "VAELoader",
+          "inputs": {"vae_name": "qwen_image_vae.safetensors"}},
+    "4": {"class_type": "CLIPTextEncode", "inputs": {"clip": ["2", 0], "text": ""}},
+    "5": {"class_type": "CLIPTextEncode", "inputs": {"clip": ["2", 0], "text": ""}},
+    "6": {"class_type": "EmptyLatentImage",
+          "inputs": {"width": 1024, "height": 1024, "batch_size": 1}},
+    "7": {"class_type": "KSampler",
+          "inputs": {"model": ["1", 0], "positive": ["4", 0], "negative": ["5", 0],
+                     "latent_image": ["6", 0], "seed": 0, "steps": 50, "cfg": 1.0,
+                     "sampler_name": "euler", "scheduler": "simple", "denoise": 1.0}},
+    "8": {"class_type": "VAEDecode", "inputs": {"samples": ["7", 0], "vae": ["3", 0]}},
+    "9": {"class_type": "SaveImage", "inputs": {"images": ["8", 0],
+                                                "filename_prefix": "forge_lab"}},
+}
+FLUX3_T2I = {
+    "1": {"class_type": "UNETLoader",
+          "inputs": {"unet_name": "flux3_image_klein_sd_int8_convrot.safetensors",
+                     "weight_dtype": "default"}},
+    "2": {"class_type": "CLIPLoader",
+          "inputs": {"clip_name": "qwen3vl_4b_int8_convrot.safetensors", "type": "flux3"}},
+    "3": {"class_type": "VAELoader",
+          "inputs": {"vae_name": "flux2-vae.safetensors"}},
+    "4": {"class_type": "CLIPTextEncode", "inputs": {"clip": ["2", 0], "text": ""}},
+    "5": {"class_type": "CLIPTextEncode", "inputs": {"clip": ["2", 0], "text": ""}},
+    "6": {"class_type": "EmptyLatentImage",
+          "inputs": {"width": 1024, "height": 1024, "batch_size": 1}},
+    "7": {"class_type": "KSampler",
+          "inputs": {"model": ["1", 0], "positive": ["4", 0], "negative": ["5", 0],
+                     "latent_image": ["6", 0], "seed": 0, "steps": 16, "cfg": 1.0,
+                     "sampler_name": "euler", "scheduler": "simple", "denoise": 1.0}},
+    "8": {"class_type": "VAEDecode", "inputs": {"samples": ["7", 0], "vae": ["3", 0]}},
+    "9": {"class_type": "SaveImage", "inputs": {"images": ["8", 0],
+                                                "filename_prefix": "forge_lab"}},
+}
+
+FLUX3_MAX_REFS = 10
+# FLUX 3 Klein EDIT: the references ARE the edit source. KSampler's latent comes from
+# ReferenceMultiLatent (not EmptyLatentImage) and ConditioningZeroOut supplies the negative.
+# Proven against forge: 912x1136 out of a portrait ref, 16 steps.
+FLUX3_EDIT = {
+    "1": {"class_type": "UNETLoader",
+          "inputs": {"unet_name": "flux3_image_klein_sd_int8_convrot.safetensors",
+                     "weight_dtype": "default"}},
+    "2": {"class_type": "CLIPLoader",
+          "inputs": {"clip_name": "qwen3vl_4b_int8_convrot.safetensors", "type": "flux3"}},
+    "3": {"class_type": "VAELoader", "inputs": {"vae_name": "flux2-vae.safetensors"}},
+    "4": {"class_type": "CLIPTextEncode", "inputs": {"clip": ["2", 0], "text": ""}},
+    "32": {"class_type": "ConditioningZeroOut", "inputs": {"conditioning": ["4", 0]}},
+    "11": {"class_type": "LoadImage", "inputs": {"image": ""}},
+    "17": {"class_type": "ReferenceMultiLatent",
+           "inputs": {"positive": ["4", 0], "resolution": "resize",
+                      "resolution.megapixels": 1.0, "negative": ["32", 0],
+                      "vae": ["3", 0], "images.image0": ["11", 0]}},
+    "7": {"class_type": "KSampler",
+          "inputs": {"model": ["1", 0], "positive": ["17", 0], "negative": ["17", 1],
+                     "latent_image": ["17", 2], "seed": 0, "steps": 16, "cfg": 1.0,
+                     "sampler_name": "euler", "scheduler": "simple", "denoise": 1.0}},
+    "8": {"class_type": "VAEDecode", "inputs": {"samples": ["7", 0], "vae": ["3", 0]}},
+    "9": {"class_type": "SaveImage", "inputs": {"images": ["8", 0],
+                                                "filename_prefix": "forge_lab"}},
+}
+
+
 BG_PROMPT = ("This is an RGBA format image with transparency. Remove the background "
              "from <image1> completely, keeping the subject exactly as it is — same "
              "pose, lighting, colours and detail. The image has an alpha channel and "
@@ -143,7 +243,10 @@ BG_PROMPT = ("This is an RGBA format image with transparency. Remove the backgro
 # ref_images autogrow is max 9, and Qwen-Image's images autogrow names image_1..image_16.
 # Defined BEFORE MODES — MODES references them at import time.
 H3_MAX_REFS = 9
-QWEN_MAX_REFS = 16
+# The NODE has 16 slots but the MODEL is documented for "up to 10 reference images"
+# (Qwen-Image-2.1 launch + the ComfyUI Ref2Image workflow). Past 10 is outside what it was
+# built for, so the app stops there.
+QWEN_MAX_REFS = 10
 
 MODES = {
     "t2i": {"label": "Text to image", "graph": QWEN_T2I, "ref": False,
@@ -156,10 +259,28 @@ MODES = {
            "help": "Image-edit with a canned transparency prompt — edit it freely.",
            "prompt": BG_PROMPT},
     # One video entry; the VARIANT lives in the VIDEO MODE dropdown (VIDEO_MODES).
+    "krea2":    {"label": "Krea 2 · Turbo", "graph": KREA2_T2I, "ref": False,
+                 "engine": "krea2", "default_steps": 8,
+                 "help": "Krea 2 Turbo — the 8-step distilled Krea 2 (photorealism / aesthetic "
+                         "specialist). 8 steps, cfg 1.0, euler/simple. Plain text-to-image."},
+    "krea2raw": {"label": "Krea 2 · Raw", "graph": KREA2_RAW_T2I, "ref": False,
+                 "engine": "krea2", "default_steps": 50,
+                 "help": "Krea 2 Raw — the undistilled 50-step checkpoint. Heavier and slower "
+                         "than Turbo; the quality ceiling for Krea 2."},
+    "flux3":    {"label": "FLUX 3 Klein", "graph": FLUX3_T2I, "ref": False,
+                 "engine": "flux3", "default_steps": 16,
+                 "help": "FLUX 3 Image Klein (distilled, 5.6B) — text-to-image in one model. "
+                         "16 steps, cfg 1.0, euler/simple. int8 weights (RTX 30-series)."},
+    "flux3edit": {"label": "FLUX 3 Klein · Edit", "graph": FLUX3_EDIT, "ref": True,
+                  "max_refs": FLUX3_MAX_REFS, "engine": "flux3", "default_steps": 16,
+                  "help": "FLUX 3 Klein · Edit — change a picture you already have. ref 1 is the "
+                          "edit target (the canvas follows its aspect); add more for a "
+                          "multi-reference composition. 16 steps, cfg 1.0."},
     "video": {"label": "Video", "video": True, "graph": None, "ref": False,
               "steps": 12, "width": 1344, "height": 768,
               "help": "H3 video — the per-model note under POLISH PROMPT says what each "
-                      "variant is for. 12 steps (base model) is the "
+                      "variant is for. ⚠️ The character stays period: the colonial wardrobe IS the "
+                      "character, so do not prompt modern dress. 12 steps (base model) is the "
                       "quality default; 4 steps uses the turbo distill — ~4x faster but the "
                       "face goes soft."},
     # WAN 2.2 is a separate KIND, not a variant of H3: 16 fps instead of 24, NO audio at
@@ -171,7 +292,7 @@ MODES = {
                     "cfg 1.0 — the negative prompt is INERT) and Full (20 steps, no LoRAs, "
                     "shift 8.0, a real negative prompt) are different models, not a speed "
                     "setting. Shift, the LoRA pair, the expert split and the step count are "
-                    "fixed per path. It CANNOT carry a character LoRA (H3 ref2va only)."},
+                    "fixed per path. It CANNOT carry the character LoRA (H3 ref2va only)."},
     # LTX 2.3 IC-LoRA — video-to-video by STRUCTURE, not by text. Its own KIND slot for SIZE
     # (canvas must be divisible by 64, which is a rule no other engine has).
     "ltx": {"label": "LTX 2.3 video-to-video", "video": True, "ltx": True, "graph": None,
@@ -202,7 +323,7 @@ MODES = {
                      "~10x faster than it plays; one card is enough."},
 }
 
-IMAGE_MODES = ("t2i", "edit", "bg")
+IMAGE_MODES = ("t2i", "edit", "bg", "krea2", "krea2raw", "flux3")
 
 # ---- the MODEL dropdown ---------------------------------------------------------------
 # KIND is Image|Video; MODEL lists that KIND's models in ONE flat set. Video entries name
@@ -212,7 +333,11 @@ IMAGE_MODES = ("t2i", "edit", "bg")
 MODEL_CHOICES = {
     "Image": [("t2i", None, "Text to image"),
               ("edit", None, "Edit image"),
-              ("bg", None, "Remove background")],
+              ("bg", None, "Remove background"),
+              ("krea2", None, "Krea 2 · Turbo (8 steps)"),
+              ("krea2raw", None, "Krea 2 · Raw (50 steps)"),
+              ("flux3", None, "FLUX 3 Klein (16 steps)"),
+              ("flux3edit", None, "FLUX 3 Klein · Edit (16 steps)")],
     "Video": [("video", "r2v", "H3 · Character reference (r2v)"),
               ("video", "i2v", "H3 · First frame (i2v)"),
               ("video", "flf", "H3 · First + last frame"),
@@ -224,6 +349,58 @@ MODEL_CHOICES = {
               ("wan", "s2v", "WAN 2.2 · Song / lip-sync (s2v)"),
               ("ltx", "iclora", "LTX 2.3 · Restyle from a clip (ic-lora)"),
               ("animate2", "motion", "WAN ANIMATE 2 · Motion transfer (still + clip)")],
+}
+
+
+# What each MODEL card says (UI option A, slice 2): MODEL_CHOICES label -> (title, subtitle,
+# primary). Plain English on top, the ENGINE underneath — the engine stays visible because
+# "first frame" exists on H3 and on WAN and picking the wrong one is invisible until you look
+# at the result. primary=True: a big card; False: a row under "More models". A label missing
+# here still gets a row (title = the raw label) — ui_matrix §1c keeps this table complete.
+MODEL_CARDS = {
+    "Text to image":                    ("From a prompt", "Qwen \u00b7 text to image", True),
+    "Edit image":                       ("Edit an image", "Qwen \u00b7 edit", True),
+    "Krea 2 \u00b7 Turbo (8 steps)":   ("Krea 2 Turbo", "8 steps \u00b7 fast", True),
+    "FLUX 3 Klein (16 steps)":          ("FLUX 3 Klein", "16 steps", True),
+    "Remove background":                ("Remove background", "Qwen", False),
+    "Krea 2 \u00b7 Raw (50 steps)":    ("Krea 2 Raw", "50 steps \u00b7 slow, unpolished", False),
+    "FLUX 3 Klein \u00b7 Edit (16 steps)": ("FLUX 3 Klein edit", "16 steps \u00b7 canvas follows ref 1", False),
+    "H3 \u00b7 Character reference (r2v)": ("A character", "H3 \u00b7 reference stills", True),
+    "H3 \u00b7 First frame (i2v)":     ("A first frame", "H3 \u00b7 i2v", True),
+    "H3 \u00b7 First + last frame":    ("First + last frame", "H3 \u00b7 flf", True),
+    "H3 \u00b7 Text only":             ("Just text", "H3 \u00b7 t2v", True),
+    "H3 \u00b7 Continue a clip":       ("Continue a clip", "H3", False),
+    "WAN 2.2 \u00b7 Text to video":    ("Just text", "WAN 2.2 \u00b7 t2v", False),
+    "WAN 2.2 \u00b7 First frame (i2v)": ("A first frame", "WAN 2.2 \u00b7 i2v", False),
+    "WAN 2.2 \u00b7 First + last frame": ("First + last frame", "WAN 2.2 \u00b7 flf2v", False),
+    "WAN 2.2 \u00b7 Song / lip-sync (s2v)": ("Song / lip-sync", "WAN 2.2 \u00b7 s2v", False),
+    "LTX 2.3 \u00b7 Restyle from a clip (ic-lora)": ("Restyle a clip", "LTX 2.3 \u00b7 ic-lora", False),
+    "WAN ANIMATE 2 \u00b7 Motion transfer (still + clip)": ("Motion transfer", "WAN Animate 2 \u00b7 still + clip", False),
+}
+
+
+# The same cards in plain words: what each is FOR, not which engine runs it. Shown while
+# the machine room is closed (round-2 review, new user: "Qwen, 8 steps, i2v - I don't know
+# what any of this means"); "Show the machine room" brings the engine names back.
+MODEL_CARDS_PLAIN = {
+    "Text to image":                    "the best all-rounder",
+    "Edit image":                       "change a picture you have",
+    "Krea 2 \u00b7 Turbo (8 steps)":   "fast, for quick tries",
+    "FLUX 3 Klein (16 steps)":          "crisp detail",
+    "Remove background":                "cut the subject out",
+    "Krea 2 \u00b7 Raw (50 steps)":    "slow, natural, unpolished",
+    "FLUX 3 Klein \u00b7 Edit (16 steps)": "edit with crisp detail",
+    "H3 \u00b7 Character reference (r2v)": "from a character's pictures",
+    "H3 \u00b7 First frame (i2v)":     "a picture starts moving",
+    "H3 \u00b7 First + last frame":    "from one picture to another",
+    "H3 \u00b7 Text only":             "from words alone",
+    "H3 \u00b7 Continue a clip":       "carry on from a video",
+    "WAN 2.2 \u00b7 Text to video":    "the older model, from words",
+    "WAN 2.2 \u00b7 First frame (i2v)": "the older model, from a picture",
+    "WAN 2.2 \u00b7 First + last frame": "the older model, picture to picture",
+    "WAN 2.2 \u00b7 Song / lip-sync (s2v)": "a picture sings a song",
+    "LTX 2.3 \u00b7 Restyle from a clip (ic-lora)": "a video in a new style",
+    "WAN ANIMATE 2 \u00b7 Motion transfer (still + clip)": "a picture copies a video's moves",
 }
 
 
@@ -263,17 +440,18 @@ MODEL_HELP = {
     "video:r2v": "H3 character reference — LOCKS A CHARACTER'S IDENTITY from your stills. "
                  "Tag each one in the prompt (<Picture 1>, <Picture 2>… in the order added) "
                  "and say what each drives. ONE clean still per character: untagged extras "
-                 "blend the faces together. This is the main character path.",
+                 "blend the faces together. This is the character path.",
     "video:i2v": "H3 first frame — animates ONE still: an approved frame, or a still you "
                  "generated first. ⚠️ This is the fl2va path, where the character LoRA does NOT "
-                 "apply — the still IS the identity, so make it a good one.",
+                 "apply — the still IS the identity, so make it a good one. the character stays period: "
+                 "the colonial wardrobe is the character, not drift.",
     "video:flf": "H3 first + last frame — animates BETWEEN two stills. Use it when you know "
                  "where the shot has to end: a door closing, a cut to a pose.",
     "video:t2v": "H3 text only — no image at all. B-roll, skies, establishing shots: anything "
                  "with no face to keep consistent.",
     "video:cont": "H3 continue a clip — takes the previous clip's LAST frame as the first "
                   "frame. This is how you go past the model's ~15s ceiling without a cut.",
-    "wan:t2v": "WAN 2.2 text only — 16 fps, NO audio, and it CANNOT carry a character LoRA "
+    "wan:t2v": "WAN 2.2 text only — 16 fps, NO audio, and it CANNOT carry the character LoRA "
                "(H3 ref2va only). Use it for B-roll and backgrounds. Turbo (4 steps, cfg 1.0) "
                "has an INERT negative prompt; the Full 20-step path is where it works.",
     "wan:i2v": "WAN 2.2 first frame — 16 fps, NO audio, no character LoRA. B-roll and "
@@ -282,8 +460,8 @@ MODEL_HELP = {
                  "the first frame, ref 2 the last one.",
     "wan:s2v": "WAN 2.2 Song / lip-sync (S2V) — the character PERFORMS the audio you pick: "
                "mouth, jaw and small head movements follow the track. ONE clean still and one "
-               "audio file. That still IS the character — this path CANNOT carry a "
-               "character LoRA, so identity comes from the picture alone. 16 fps with one continuous "
+               "audio file. That still IS the character — this path CANNOT carry the Avery "
+               "LoRA, so identity comes from the picture alone. 16 fps with one continuous "
                "audio track across the whole scene. ONE path only: 4 steps, cfg 1.0, shift 8. "
                "It renders SILENT; the audio is muxed in on this Mac when the clip downloads.",
     "ltx:iclora": "LTX 2.3 + IC-LoRA Union Control — RESTYLE FROM A CLIP. Hand it a source video: "
@@ -439,7 +617,7 @@ def engine_of(mode):
         return "yue2"
     if m.get("video"):
         return "h3"
-    return "qwen"
+    return m.get("engine", "qwen")
 
 
 # ---- CARD MODE helpers: Solo / Turbo / Studio ---------------------------------------------
@@ -456,6 +634,8 @@ def migrate_card_mode(value):
         return "Turbo"
     if value == "Studio":
         return "Studio"
+    if value == "Both":                # two takes at once, one per card (2026-10-17)
+        return "Both"
     return "Solo"
 
 
@@ -734,7 +914,7 @@ def h3_frames(seconds):
 
 def h3_graph(mode, prompt, refs, length, width, height, steps, seed,
              lora=None, lora_strength=1.0, audio=True, last_frame=None, turbo=True,
-              guide_audio=None, guide_frame_idx=0, gpus=1):
+              guide_audio=None, guide_frame_idx=0, gpus=1, ref_audios=None):
     """H3 video graph. mode 'r2v' = reference images -> video (pins a character; up to
     H3_MAX_REFS stills); 'i2v' = first/last frame -> video. Both share the sampler and
     mux tail. `refs` is an ORDERED list of already-uploaded filenames."""
@@ -825,6 +1005,14 @@ def h3_graph(mode, prompt, refs, length, width, height, steps, seed,
                 nid = "load%d" % i
                 g[nid] = {"class_type": "LoadImage", "inputs": {"image": rn}}
                 g["cond"]["inputs"]["ref_images.ref_image_%d" % i] = [nid, 0]
+        # VOICE-TIMBRE REFERENCES (MiniMax ref guide 2.4): "<Audio N> is the voice-timbre
+        # reference for <Subject N> (S1)". Unlike the AddGuide lip-sync track (copied 1:1),
+        # H3 PERFORMS the line itself in that voice, with the delivery the prompt writes
+        # outside <d>. Server cap is 3, same dotted-autogrow key rule as ref_images.
+        for i, an in enumerate([a for a in (ref_audios or []) if a][:3], start=1):
+            nid = "rauds%d" % i
+            g[nid] = {"class_type": "LoadAudio", "inputs": {"audio": an}}
+            g["cond"]["inputs"]["ref_audios.ref_audio_%d" % i] = [nid, 0]
     else:
         # fl2va: first_frame and last_frame are BOTH optional, which is what makes
         # text-only (neither) and first+last (both) the same node as plain i2v.
@@ -988,9 +1176,10 @@ def resolve_forge(force=False):
     return FORGE
 
 
-def get_json(path, timeout=15):
+def get_json(path, timeout=15, base=None):
+    """`base`: another ComfyUI (BOTH cards mode: card 2's, see _base_for); None = FORGE."""
     m = _ensure()
-    with urllib.request.urlopen(FORGE + path, timeout=timeout) as r:
+    with urllib.request.urlopen((base or FORGE) + path, timeout=timeout) as r:
         return json.loads(r.read().decode("utf-8", "replace"))
 
 
@@ -999,9 +1188,9 @@ def _ensure():
         resolve_forge(force=True)
 
 
-def post_json(path, obj, timeout=60):
+def post_json(path, obj, timeout=60, base=None):
     _ensure()
-    req = urllib.request.Request(FORGE + path, data=json.dumps(obj).encode(),
+    req = urllib.request.Request((base or FORGE) + path, data=json.dumps(obj).encode(),
                                  headers={"Content-Type": "application/json"})
     try:
         with urllib.request.urlopen(req, timeout=timeout) as r:
@@ -1022,14 +1211,56 @@ def post_json(path, obj, timeout=60):
                            % (e.code, path, (body or "(empty body)")[:600])) from None
 
 
-def get_bytes(path, timeout=180):
+def get_bytes(path, timeout=180, base=None):
     _ensure()
-    with urllib.request.urlopen(FORGE + path, timeout=timeout) as r:
+    with urllib.request.urlopen((base or FORGE) + path, timeout=timeout) as r:
         return r.read()
 
 
+def _base_for(pid):
+    """The ComfyUI a take was SENT to (BOTH cards mode routes some to card 2's :8189). None
+    = the main one. Status, history, downloads and cancel must ask THAT one: card 2's
+    ComfyUI has its own queue and history (it shares the input/output folders)."""
+    try:
+        import cards
+        port = cards.port_of(pid)
+    except Exception:
+        return None
+    if not port or int(port) == int(F_PORT):
+        return None
+    return "http://%s:%d" % (F_HOST, int(port))
+
+
+def _route_for(mode, p):
+    """Which ComfyUI a NEW take goes to. A 2-card (Turbo) render always runs on the main one
+    (it spans both cards); everything else asks the card manager (BOTH mode balances).
+
+    ⚠️ `p["port"]` wins over the balancing: the queue's dispatcher has ALREADY checked that
+    card for room and claimed it, so re-picking here would put the job on the other card
+    behind the dispatcher's back. Only the dispatcher sets it.
+    """
+    if int(p.get("gpus", 1) or 1) >= 2:
+        return F_PORT
+    if p.get("port"):
+        try:
+            return int(p["port"])
+        except (TypeError, ValueError):
+            _log_err("ignoring a bad pinned port %r" % (p.get("port"),))
+    try:
+        import cards
+        kind = ("song" if MODES[mode].get("song") else
+                "video" if (MODES[mode].get("video") or MODES[mode].get("wan")) else "image")
+        return int(cards.pick_port(kind))
+    except Exception:
+        return F_PORT
+
+
 def upload_image(path):
-    """Multipart POST to /upload/image — no requests library, no PIL."""
+    """Multipart POST to /upload/image — no requests library, no PIL. Inside a Comfy-SDK
+    submit the file is STAGED instead and the SDK uploads it as an asset (comfy_route)."""
+    if getattr(_SUBMIT_TL, "sdk", False):
+        import comfy_route
+        return comfy_route.stage(path)
     _ensure()
     name = os.path.basename(path)
     with open(path, "rb") as f:
@@ -1133,31 +1364,171 @@ def _png_has_alpha(path):
 _THUMB_CACHE = os.path.join(tempfile.gettempdir(), "forge_lab_thumbs")
 
 
+_THUMB_MEM = {}          # (path, size, mtime, box) -> PhotoImage, oldest first
+_THUMB_MEM_MAX = 600
+
+
+def _png_dims(path):
+    """(w, h) from a PNG's IHDR, no decode; None for anything else."""
+    try:
+        with open(path, "rb") as f:
+            head = f.read(24)
+        if head[:8] == b"\x89PNG\r\n\x1a\n":
+            return struct.unpack(">II", head[16:24])
+    except Exception:
+        pass
+    return None
+
+
+def mac_hide_app():
+    """[NSApp hide:nil] through the Objective-C runtime (ctypes, no extra packages): what
+    the menu's "Hide Forge Lab" does. Returns True if it was sent. Never raises."""
+    if sys.platform != "darwin":
+        return False
+    try:
+        import ctypes
+        import ctypes.util
+        objc = ctypes.cdll.LoadLibrary(ctypes.util.find_library("objc") or
+                                       "/usr/lib/libobjc.A.dylib")
+        objc.objc_getClass.restype = ctypes.c_void_p
+        objc.objc_getClass.argtypes = [ctypes.c_char_p]
+        objc.sel_registerName.restype = ctypes.c_void_p
+        objc.sel_registerName.argtypes = [ctypes.c_char_p]
+        send = objc.objc_msgSend
+        send.restype = ctypes.c_void_p
+        send.argtypes = [ctypes.c_void_p, ctypes.c_void_p]
+        app = send(objc.objc_getClass(b"NSApplication"),
+                   objc.sel_registerName(b"sharedApplication"))
+        if not app:
+            return False
+        send.argtypes = [ctypes.c_void_p, ctypes.c_void_p, ctypes.c_void_p]
+        send(app, objc.sel_registerName(b"hide:"), None)
+        return True
+    except Exception:
+        return False
+
+
+def bind_mac_hide(root, hide=None):
+    """Cmd+H hides the app (Ryan: "fix the forge lab so hiding the app works"). Measured on
+    his Mac: the menu's Hide Forge Lab works, Cmd+M works, but Cmd+H did nothing - Tk's
+    default app menu doesn't get the key. Bound on 'all' so it works from any widget,
+    including a text box. Mac only (Command isn't a modifier elsewhere)."""
+    if sys.platform != "darwin":
+        return False
+    hide = hide or mac_hide_app
+
+    def _cmd_h(_e=None):
+        if not hide():
+            try:
+                root.iconify()             # last resort: at least get it out of the way
+            except Exception:
+                pass
+        return "break"
+    for seq in ("<Command-h>", "<Command-H>"):
+        try:
+            root.bind_all(seq, _cmd_h)
+        except Exception:
+            return False
+    return True
+
+
 def thumb_photo(path, box):
     """A tk image for a thumbnail `box` px on its longest side, or None.
 
     ⚠️ The ONLY safe way to turn a file on disk into a Tk image here — see the block above.
     Returns None rather than raising: a missing thumbnail must never take a window down.
+
+    Cached in memory by (path, size, mtime, box): the code review measured ~45 ms per
+    1328 px still and up to 140 ms per 1696x2464 take, decoded again on every repaint (a
+    5 s freeze after launch, ~1 s per keystroke in the Characters search). A big PNG is
+    shrunk once on disk (sips) so even the first load decodes a small file.
     """
     import tkinter as tk
     try:
         src = str(path)
-        if not os.path.exists(src):
-            return None
-        if _png_has_alpha(src):
-            small = _thumb_cache_path(src, box)
-            if not os.path.exists(small):
-                os.makedirs(_THUMB_CACHE, exist_ok=True)
-                subprocess.run(["sips", "--resampleHeightWidthMax", str(int(box)),
-                                src, "--out", small],
-                               capture_output=True, timeout=60)
-            if os.path.exists(small) and os.path.getsize(small) > 0:
-                return tk.PhotoImage(file=small)     # already <= box, no subsample needed
-        img = tk.PhotoImage(file=src)
-        k = max(1, int(round(max(img.width(), img.height()) / float(box))))
-        return img.subsample(k, k) if k > 1 else img
+        st_ = os.stat(src)
     except Exception:
         return None
+    key = (os.path.abspath(src), st_.st_size, int(st_.st_mtime), int(box))
+    img = _THUMB_MEM.pop(key, None)
+    if img is None:
+        try:
+            dims = _png_dims(src)
+            alpha = _png_has_alpha(src)
+            if alpha or (dims and max(dims) > 2 * int(box)):
+                small = _thumb_cache_path(src, box)
+                if not os.path.exists(small):
+                    os.makedirs(_THUMB_CACHE, exist_ok=True)
+                    try:
+                        subprocess.run(["sips", "--resampleHeightWidthMax", str(int(box)),
+                                        src, "--out", small],
+                                       capture_output=True, timeout=60)
+                    except Exception:
+                        pass                         # no sips (not a Mac): decode below
+                if os.path.exists(small) and os.path.getsize(small) > 0:
+                    img = tk.PhotoImage(file=small)  # already <= box, no subsample needed
+            if img is None and not (alpha and sys.platform == "darwin"):
+                full = tk.PhotoImage(file=src)
+                k = max(1, int(round(max(full.width(), full.height()) / float(box))))
+                img = full.subsample(k, k) if k > 1 else full
+        except Exception:
+            return None
+        if img is None:
+            return None
+    if not _THUMB_MEM:
+        import atexit                            # drop the images before Python tears down
+        atexit.register(_THUMB_MEM.clear)        # (else noisy Image.__del__ at exit)
+    _THUMB_MEM[key] = img                       # newest last
+    while len(_THUMB_MEM) > _THUMB_MEM_MAX:
+        _THUMB_MEM.pop(next(iter(_THUMB_MEM)))
+    return img
+
+
+def _poster_path(video):
+    """Where a video's poster frame is cached: DATA/thumbs/posters, keyed by path+size+mtime
+    (a re-cut file gets a new poster). Not in the run folder: nothing else should find it."""
+    try:
+        st_ = os.stat(video)
+        key = "%s|%d|%d" % (os.path.abspath(video), st_.st_size, int(st_.st_mtime))
+    except Exception:
+        return None
+    return os.path.join(DATA, "thumbs", "posters",
+                        "p" + hashlib.sha1(key.encode("utf-8")).hexdigest()[:16] + ".png")
+
+
+def video_poster(video, make=True):
+    """A still for a video take's thumbnail (Ryan 2026-10-22: "for the videos can you add a
+    thumbnail as a preview"). A frame ~0.5 s in (the very first is often black or a fade),
+    the first frame if the clip is shorter. Cached. -> png path, or None.
+    ⚠️ PNG, opaque (rgb24), longest side 190 = the takes box: Tk's PhotoImage reads no JPEG,
+    and a poster that already fits needs neither sips nor a subsample.
+    make=False only LOOKS (the takes list must never wait on ffmpeg on the Tk thread)."""
+    out = _poster_path(video)
+    if not out:
+        return None
+    if os.path.exists(out) and os.path.getsize(out) > 0:
+        return out
+    if not make:
+        return None
+    os.makedirs(os.path.dirname(out), exist_ok=True)
+    tmp = out + ".tmp.png"
+    for pre in (["-ss", "0.5"], []):
+        try:
+            subprocess.run(["ffmpeg", "-v", "error", "-y"] + pre +
+                           ["-i", video, "-frames:v", "1",
+                            "-vf", "scale='if(gt(iw,ih),190,-2)':'if(gt(iw,ih),-2,190)'",
+                            "-pix_fmt", "rgb24", tmp],
+                           capture_output=True, timeout=60)
+        except Exception:
+            continue
+        if os.path.exists(tmp) and os.path.getsize(tmp) > 0:
+            os.replace(tmp, out)
+            return out
+    try:
+        os.remove(tmp)
+    except OSError:
+        pass
+    return None
 
 
 def _thumb_cache_path(src, box):
@@ -1305,12 +1676,52 @@ def build_graph(mode, p):
                      turbo=bool(p.get("turbo", int(p.get("steps", 4)) <= 4)),
                      guide_audio=p.get("guide_audio"),
                      guide_frame_idx=int(p.get("guide_frame_idx", 0)),
+                     ref_audios=p.get("ref_audio_names"),
                      # RAYLIGHT: 1 card = today's path, 2 = the same graph split
                      # across both (see h3_to_raylight). Default 1 so nothing that
                      # does not opt in changes behaviour.
                      gpus=int(p.get("gpus", 1)))
         _check_graph(g)
         return g, _seed_for(p)
+    if MODES[mode].get("engine") in ("krea2", "flux3"):
+        # standard flow graph: one CLIPTextEncode per prompt, a plain KSampler
+        _m = MODES[mode]
+        g = json.loads(json.dumps(_m["graph"]))
+        seed = _seed_for(p)
+        g["4"]["inputs"]["text"] = p.get("prompt", "") or _m.get("prompt", "")
+        if "17" in g:
+            # FLUX 3 EDIT: the references ARE the edit source, so there is no width/height to
+            # set (the canvas follows ref 1) and no separate negative encoder.
+            # ⚠️ DOTTED keys: images.imageN and resolution.megapixels. A nested dict
+            # validates and is then DROPPED, silently ignoring the reference.
+            rl = [r for r in (p.get("ref_names") or []) if r][:FLUX3_MAX_REFS]
+            if not rl:
+                raise ValueError("FLUX 3 Klein · Edit needs a reference image")
+            for _i, _rn in enumerate(rl):
+                if _i == 0:
+                    g["11"]["inputs"]["image"] = _rn
+                    _nid = "11"
+                else:
+                    _nid = "rf%d" % (_i + 1)
+                    g[_nid] = {"class_type": "LoadImage", "inputs": {"image": _rn}}
+                g["17"]["inputs"]["images.image%d" % _i] = [_nid, 0]
+        else:
+            g["5"]["inputs"]["text"] = p.get("negative", "") or ""
+            g["6"]["inputs"]["width"] = int(p.get("width", 1024))
+            g["6"]["inputs"]["height"] = int(p.get("height", 1024))
+        g["7"]["inputs"]["seed"] = seed
+        g["7"]["inputs"]["steps"] = int(p.get("steps", _m.get("default_steps", 20)))
+        g["9"]["inputs"]["filename_prefix"] = p.get("prefix", "forge_lab")
+        # LoRA: the Krea 2 style LoRAs live in the same models/loras folder as H3's, so the
+        # shared LORA dropdown already offers them. Inserted between UNETLoader and the sampler.
+        _lora = p.get("lora") or None
+        if _lora:
+            g["10"] = {"class_type": "LoraLoaderModelOnly",
+                       "inputs": {"model": ["1", 0], "lora_name": _lora,
+                                  "strength_model": float(p.get("lora_strength", 1.0) or 1.0)}}
+            g["7"]["inputs"]["model"] = ["10", 0]
+        _check_graph(g)
+        return g, seed
     g = json.loads(json.dumps(m["graph"]))
     seed = p.get("seed", -1)
     seed = random.randint(0, 2**31 - 1) if seed in (-1, None, "") else int(seed)
@@ -1413,6 +1824,12 @@ def estimate_seconds(mode, p, ref_paths=None, warm_engine=None):
         else:
             t = H3_JOB_LOAD_S + sampling
         return t + (H3_SWITCH_S if switch else 0.0)
+    if MODES[mode].get("engine") in ("krea2", "flux3"):
+        steps = int(p.get("steps", MODES[mode].get("default_steps", 20)))
+        mp = int(p.get("width", 1024)) * int(p.get("height", 1024)) / 1e6
+        # smaller transformer than Qwen-Image, so a smaller 1MP/25-step base. ESTIMATE only.
+        base = {"krea2": 8.0, "flux3": 4.0}[MODES[mode]["engine"]]
+        return base * (max(mp, 0.05) ** QWEN_MP_EXP) * (steps / 25.0) + (QWEN_LOAD_S if switch else 0.0)
     steps = int(p.get("steps", 25))
     m = MODES[mode]
     if m["ref"] and not p.get("custom_size"):
@@ -1438,6 +1855,7 @@ def engine_load_s(mode):
     """The load term estimate_seconds() adds when the engine changes. Shown in the UI so the
     number is never a black box."""
     return {"h3": H3_SWITCH_S, "wan": WAN_LOAD_S, "qwen": QWEN_LOAD_S,
+            "krea2": QWEN_LOAD_S, "flux3": QWEN_LOAD_S,
             "ltx": LTX_SWITCH_S, "animate2": ANIMATE2_SWITCH_S,
             "yue2": YUE2_SWITCH_S}[engine_of(mode)]
 
@@ -1474,8 +1892,32 @@ def video_probe(path):
         return None
 
 
+_SUBMIT_TL = threading.local()
+
+
+def _sdk_route():
+    """True when this submit goes through the Comfy SDK (comfy_route.py)."""
+    try:
+        import comfy_route
+        return comfy_route.enabled()
+    except Exception:
+        return False
+
+
 def submit(mode, p, ref_paths=None):
-    """`ref_paths` is the ORDERED list of local stills — ref 1 is the primary."""
+    """`ref_paths` is the ORDERED list of local stills — ref 1 is the primary.
+
+    With the Comfy SDK route on (comfy_route.enabled()), the stills/voices are STAGED rather
+    than uploaded and the graph is submitted through comfy_sdk (Comfy API v2, via the rig's
+    comfy-api-proxy). The job id IS the ComfyUI prompt_id, so everything after is unchanged."""
+    _SUBMIT_TL.sdk = _sdk_route()
+    try:
+        return _submit_body(mode, p, ref_paths)
+    finally:
+        _SUBMIT_TL.sdk = False
+
+
+def _submit_body(mode, p, ref_paths=None):
     paths = [x for x in (ref_paths or []) if x]
     if MODES[mode].get("wan"):
         # WAN: i2v takes the FIRST frame, flf2v the first AND last, t2v nothing. Upload in
@@ -1535,17 +1977,53 @@ def submit(mode, p, ref_paths=None):
             # the lip-sync track. Same multipart endpoint as stills — /upload/image stores
             # any file into the input dir.
             extra["guide_audio"] = upload_image(p["guide_audio_path"])
+        if p.get("ref_audio_paths"):
+            # voice-timbre references (up to 3) — uploaded the same way
+            # ⚠️ every character's voice file is called neutral.wav, and /upload/image
+            # overwrites by basename — so upload a uniquely-named copy per voice, or two
+            # characters silently share one timbre.
+            names = []
+            for i, ap in enumerate(p["ref_audio_paths"][:3], start=1):
+                tag = os.path.basename(os.path.dirname(ap)) or "voice"
+                tmp = os.path.join(tempfile.gettempdir(), "vref%02d_%s_%s" % (i, tag, os.path.basename(ap)))
+                shutil.copyfile(ap, tmp)
+                names.append(upload_image(tmp))
+            extra["ref_audio_names"] = names
         p = dict(p, ref_names=[upload_image(x) for x in paths[:vm.get("max", 1)]], **extra)
     elif MODES[mode]["ref"]:
         if not paths:
             raise ValueError("this mode needs a reference image")
         p = dict(p, ref_names=[upload_image(x) for x in paths[:QWEN_MAX_REFS]])
     graph, seed = build_graph(mode, p)
-    r = post_json("/prompt", {"prompt": graph, "client_id": CLIENT_ID})
-    pid = r.get("prompt_id")
+    _port = _route_for(mode, p)
+    _pbase = None if _port == F_PORT else "http://%s:%d" % (F_HOST, _port)
+    pid = None
+    if getattr(_SUBMIT_TL, "sdk", False):
+        import comfy_route
+        try:
+            pid = comfy_route.submit(graph, F_HOST, _port)
+            meta_route = "comfy-sdk"
+        except comfy_route.ProxyUnreachable as _exc:
+            # nothing was accepted, so the direct path can't double-render: upload what was
+            # staged (same names) and post as before
+            _log_err("Comfy SDK proxy unreachable (%s) - sent directly instead" % _exc)
+            _SUBMIT_TL.sdk = False
+            for _sp in comfy_route.staged_paths(graph):
+                upload_image(_sp)
+    if pid is None:
+        r = post_json("/prompt", {"prompt": graph, "client_id": CLIENT_ID}, base=_pbase)
+        pid = r.get("prompt_id")
+        meta_route = "direct"
+        if not pid:
+            raise RuntimeError("forge did not return a prompt_id: %r" % r)
     if not pid:
-        raise RuntimeError("forge did not return a prompt_id: %r" % r)
-    meta = {"id": pid, "mode": mode, "label": MODES[mode]["label"],
+        raise RuntimeError("the Comfy SDK returned no job id")
+    try:
+        import cards
+        cards.remember(pid, _port)
+    except Exception:
+        pass
+    meta = {"id": pid, "mode": mode, "label": MODES[mode]["label"], "port": _port,
             "prompt": p.get("prompt", "") or MODES[mode].get("prompt", ""),
             "seed": seed, "prefix": p.get("prefix", "forge_lab"),
             "steps": int(p.get("steps", 25)),
@@ -1554,7 +2032,8 @@ def submit(mode, p, ref_paths=None):
             "custom_size": bool(p.get("custom_size", False)),
             "ref": os.path.basename(paths[0]) if paths else None,
             "refs": [os.path.basename(x) for x in paths],
-            "started": time.time(), "status": "running", "images": []}
+            "started": time.time(), "status": "running", "images": [],
+            "route": meta_route}
     if MODES[mode].get("ltx") or MODES[mode].get("animate2"):
         # ⚠️ INDEX HONESTY: ltx and animate2 BAKE their step count into the graph (8 and
         # 6) and read it from the REGISTRY, not the STEPS field — so the generic
@@ -1701,7 +2180,7 @@ def promote_graph(src_name, tw, th, model=PROMOTE_MODEL):
 # rather than a pile of knobs, and why wan_graph() takes no shift/LoRA/steps argument:
 #   * shift       5.0 WITH the lightning LoRAs, 8.0 WITHOUT. Derived from `turbo`.
 #   * LoRA pair   per TASK (t2v and i2v ship DIFFERENT lightning LoRAs) and ON only on turbo.
-#                 There is NO user LoRA for WAN — character LoRAs are H3 ref2va-only
+#                 There is NO user LoRA for WAN — the character LoRA is H3 ref2va-only
 #                 and cannot load here.
 #   * steps/cfg   turbo = 4 steps / cfg 1.0 (+LoRAs); full = 20 steps / cfg >1 (no LoRAs).
 #                 cfg 1.0 makes the negative prompt INERT, so the two paths are different
@@ -2458,10 +2937,55 @@ def read_index():
         return []
 
 
+def _index_lock():
+    """ONE lock for every writer of runs/index.json — shared through cards.INDEX_LOCK because
+    the running app is __main__ while studio_pipeline imports forge_lab as a SECOND module
+    copy, and both write the same file (BOTH mode renders two Episode shots at once)."""
+    try:
+        import cards
+        return cards.INDEX_LOCK
+    except Exception:
+        return _INDEX_LOCK_LOCAL
+
+
+_INDEX_LOCK_LOCAL = threading.RLock()
+
+
+def _index_write(items):
+    """ATOMIC: temp file + os.replace. The old in-place write truncated the file first, so a
+    read at that moment saw [] — and the next writer then saved an index with ONE take."""
+    path = _index_path()
+    tmp = "%s.%d.%d.tmp" % (path, os.getpid(), threading.get_ident())
+    with open(tmp, "w") as f:
+        json.dump(items, f, indent=1)
+    os.replace(tmp, path)
+
+
+def delete_takes(ids):
+    """Delete several takes: each folder under RUNS (guarded to paths INSIDE it, same as the
+    single delete) and their index entries in ONE write. LOCAL ONLY. -> (n removed, bytes)"""
+    ids = {str(i) for i in (ids or []) if i}
+    if not ids:
+        return 0, 0
+    root_ = os.path.abspath(RUNS) + os.sep
+    nbytes = 0
+    with _index_lock():
+        items = read_index()
+        gone = [i for i in items if i.get("id") in ids]
+        for it in gone:
+            nbytes += sum((f.get("bytes") or 0) for f in (it.get("images") or []))
+            d = os.path.abspath(os.path.join(RUNS, it.get("id", "")))
+            if d.startswith(root_) and os.path.isdir(d):
+                shutil.rmtree(d, ignore_errors=True)
+        _index_write([i for i in items if i.get("id") not in ids])
+    return len(gone), nbytes
+
+
 def _index_insert(meta):
-    items = [i for i in read_index() if i.get("id") != meta["id"]]
-    items.insert(0, meta)
-    json.dump(items, open(_index_path(), "w"), indent=1)
+    with _index_lock():
+        items = [i for i in read_index() if i.get("id") != meta["id"]]
+        items.insert(0, meta)
+        _index_write(items)
     _index_notify(meta)
 
 
@@ -2500,11 +3024,15 @@ def collect(pid):
     meta = next((i for i in items if i.get("id") == pid), None)
     if not meta:
         return None
+    _hp = _cards_follow(pid)
+    if _hp is None:
+        return {"error": "no history yet"}          # held: it goes back in line shortly
+    _b = _base_for(_hp)
     try:
-        hist = get_json("/history/%s" % pid, timeout=30)
+        hist = get_json("/history/%s" % _hp, timeout=30, base=_b)
     except Exception as e:
         return {"error": "history fetch failed: %s" % e}
-    rec = hist.get(pid)
+    rec = hist.get(_hp)
     if not rec:
         return {"error": "no history yet"}
     files = []
@@ -2519,7 +3047,7 @@ def collect(pid):
                                         "subfolder": img.get("subfolder", ""),
                                         "type": img.get("type", "output")})
             try:
-                blob = get_bytes("/view?" + q)
+                blob = get_bytes("/view?" + q, base=_b)
             except Exception as e:
                 return {"error": "download failed: %s" % e}
             d = os.path.join(RUNS, pid)
@@ -2582,9 +3110,24 @@ def collect(pid):
     return meta
 
 
-def run_state(pid):
+def _cards_follow(pid):
+    """cards.follow(): None while a run is HELD for someone's 'Do mine first' (it is still
+    queued, just outside ComfyUI for a moment), else the id to look it up under."""
     try:
-        hist = get_json("/history/%s" % pid, timeout=15)
+        import cards
+        return cards.follow(pid)
+    except Exception:
+        return pid
+
+
+def run_state(pid):
+    _f = _cards_follow(pid)
+    if _f is None:
+        return {"state": "queued", "position": 1, "held": True}
+    pid = _f
+    _b = _base_for(pid)
+    try:
+        hist = get_json("/history/%s" % pid, timeout=15, base=_b)
     except Exception:
         return {"state": "unknown"}
     if pid in hist:
@@ -2599,7 +3142,7 @@ def run_state(pid):
             return {"state": "error", "detail": det[0] if det else ""}
         return {"state": "running"}
     try:
-        q = get_json("/queue", timeout=15)
+        q = get_json("/queue", timeout=15, base=_b)
     except Exception:
         return {"state": "unknown"}
     for i, it in enumerate(q.get("queue_running") or []):
@@ -2634,23 +3177,32 @@ def cancel_queued(pids):
     ⚠️ Only the ids you pass, and only if they are still WAITING: forge's queue is shared with
     the overnight runner and other agents, and the RUNNING prompt is INTERRUPT's job. Returns
     the ids actually cancelled. Guarded by tools/net_matrix.py §3."""
-    q = get_json("/queue", timeout=10)
-    pending = {it[1] for it in (q.get("queue_pending") or [])}
-    mine = [p for p in pids if p in pending]
-    if mine:
-        post_json("/queue", {"delete": mine}, timeout=15)
-        for pid in mine:
-            _index_update(pid, status="cancelled", orphan_checked=True)
+    mine = []
+    by_base = {}
+    for p_ in pids:                    # BOTH mode: each take is waiting on ITS ComfyUI
+        by_base.setdefault(_base_for(p_), []).append(p_)
+    for _b, _pids in by_base.items():
+        q = get_json("/queue", timeout=10, base=_b)
+        pending = {it[1] for it in (q.get("queue_pending") or [])}
+        _mine = [p for p in _pids if p in pending]
+        if _mine:
+            post_json("/queue", {"delete": _mine}, timeout=15, base=_b)
+            for pid in _mine:
+                _index_update(pid, status="cancelled", orphan_checked=True)
+        mine += _mine
     return mine
 
 
-def wait_and_collect(pid, timeout=1800, poll=3):
+def wait_and_collect(pid, timeout=1800, poll=3, progress=None):
     """Poll run_state(pid) until the run leaves running/queued, then collect(pid).
 
     Headless callers (a script, the rig) import forge_lab and call submit() directly —
     nothing flips the index entry's status off 'running' unless collect() runs. This is
     the public helper that closes that gap: it blocks up to `timeout` seconds and returns
     the meta dict collect() produces (or a state dict if collect() had nothing to read).
+
+    `progress(msg)` is called once per poll with a plain sentence ("rendering step 4/25") so
+    the QUEUE row and a window's status line can show it is alive; it may raise nothing.
     """
     deadline = time.time() + float(timeout)
     state = {"state": "unknown"}
@@ -2658,6 +3210,17 @@ def wait_and_collect(pid, timeout=1800, poll=3):
         state = run_state(pid)
         if state.get("state") not in ("running", "queued"):
             break
+        if progress is not None:
+            # the caller's own live line (the QUEUE row's note, a window's status bar). One
+            # call per poll, and never allowed to break the wait.
+            try:
+                pr = state.get("progress") or {}
+                if pr.get("value") and pr.get("max"):
+                    progress("rendering step %s/%s" % (pr["value"], pr["max"]))
+                else:
+                    progress("rendering on forge")
+            except Exception:
+                pass
         time.sleep(poll)
     meta = collect(pid)
     if meta is None:
@@ -2667,12 +3230,13 @@ def wait_and_collect(pid, timeout=1800, poll=3):
 
 def _index_update(pid, **fields):
     """Update one index entry in place WITHOUT reordering the list."""
-    items = read_index()
-    for it in items:
-        if it.get("id") == pid:
-            it.update(fields)
-            break
-    json.dump(items, open(_index_path(), "w"), indent=1)
+    with _index_lock():
+        items = read_index()
+        for it in items:
+            if it.get("id") == pid:
+                it.update(fields)
+                break
+        _index_write(items)
 
 
 # ---- takes · RATING / FILTER / LINEAGE (module-level, so a GPU-free test can prove them) ----
@@ -2701,6 +3265,116 @@ def set_rating(pid, value):
     v = 1 if v > 0 else (-1 if v < 0 else 0)
     _index_update(pid, rating=v)
     return v
+
+
+TAKES_SHOWN = 100      # the home page's Takes list (Ryan 2026-10-22: 40 -> 100)
+
+# Ryan 2026-10-22: "add a filter for recent takes for images, videos, and songs".
+# The kind filter is applied BEFORE the 100 are taken, so "Songs" is your last 100 songs,
+# not the songs that happen to be among the last 100 takes.
+KIND_FILTERS = ["All", "Images", "Videos", "Songs"]
+_KIND_OF_FILTER = {"Images": "image", "Videos": "video", "Songs": "song"}
+
+
+def take_kind(it):
+    """'image' | 'video' | 'song' for one index entry: its file decides, else its mode."""
+    it = it or {}
+    f_ = str(((it.get("images") or [{}])[0] or {}).get("file") or "").lower()
+    if f_.endswith((".mp4", ".webm", ".mov", ".mkv", ".gif")):
+        return "video"
+    if f_.endswith((".flac", ".wav", ".mp3", ".ogg", ".m4a", ".aac")):
+        return "song"
+    if f_.endswith((".png", ".jpg", ".jpeg", ".webp")):
+        return "image"
+    mode = it.get("mode")
+    if mode == "song":
+        return "song"
+    if it.get("video") or (MODES.get(mode) or {}).get("video"):
+        return "video"
+    return "image"
+
+
+def filter_kind(items, kind_filter="All"):
+    """PURE. Keep only the takes of one kind (KIND_FILTERS); anything else = All."""
+    want = _KIND_OF_FILTER.get(kind_filter)
+    if not want:
+        return list(items or [])
+    return [it for it in (items or []) if take_kind(it) == want]
+
+
+# ---- SAVED PROMPTS (♥) — Ryan 2026-10-22: "a favorite button so if i have a prompt that I
+# like it would be easy for me to save and re use later". ♥ is NOT the ★ rating: ★ keeps a
+# TAKE (its picture), ♥ keeps the PROMPT TEXT, so it can be used again on any model.
+# Stored newest first in DATA/saved_prompts.json; the same text is never saved twice.
+def _fav_file():
+    return os.path.join(DATA, "saved_prompts.json")
+
+
+def fav_list():
+    try:
+        items = json.load(open(_fav_file()))
+    except Exception:
+        return []
+    return [d for d in items if isinstance(d, dict) and str(d.get("prompt") or "").strip()]
+
+
+def _fav_write(items):
+    os.makedirs(os.path.dirname(_fav_file()), exist_ok=True)
+    tmp = _fav_file() + ".tmp"
+    with open(tmp, "w") as fh_:
+        json.dump(items, fh_, indent=1)
+    os.replace(tmp, _fav_file())
+
+
+def fav_name(text):
+    """A short label for the list: the first few words."""
+    words = " ".join(str(text or "").split()).split(" ")
+    out = ""
+    for w_ in words:
+        if len(out) + len(w_) + 1 > 60:
+            return out + "\u2026"
+        out = (out + " " + w_).strip()
+    return out
+
+
+def fav_has(text):
+    t = str(text or "").strip()
+    return bool(t) and any(d["prompt"].strip() == t for d in fav_list())
+
+
+def fav_add(text, mode=None, source=None):
+    """Save a prompt (newest first; saving the same text again moves it to the top)."""
+    t = str(text or "").strip()
+    if not t:
+        raise ValueError("the prompt is empty \u2014 nothing to save")
+    items = [d for d in fav_list() if d["prompt"].strip() != t]
+    items.insert(0, {"prompt": t, "name": fav_name(t), "mode": mode or "",
+                     "source": source or "", "added": time.time()})
+    _fav_write(items)
+    return items[0]
+
+
+def fav_remove(text):
+    t = str(text or "").strip()
+    items = fav_list()
+    left = [d for d in items if d["prompt"].strip() != t]
+    _fav_write(left)
+    return len(items) - len(left)
+
+
+def fav_toggle(text, mode=None, source=None):
+    """♥ on a take: saved -> unsaved -> saved. -> True when it is saved now."""
+    if fav_has(text):
+        fav_remove(text)
+        return False
+    fav_add(text, mode, source)
+    return True
+
+
+def fav_search(query=""):
+    q = str(query or "").strip().lower()
+    return [d for d in fav_list() if not q or q in d["prompt"].lower()
+            or q in str(d.get("name") or "").lower()]
 
 
 def filter_takes(items, rating_filter="All", unkept_only=False):
@@ -2762,13 +3436,19 @@ def take_specs(it):
 
 def _style_toggle(btn, on, C):
     """House toggle idiom (no Checkbutton): rust fill + white when ON, panel2 + ink when off.
-    C is passed in because the palette lives inside launch()."""
+    C is passed in because the palette lives inside launch().
+
+    ⚠️ macOS (Aqua) IGNORES a Button's bg and draws it light, so white-on-"rust" and
+    ink-on-"panel2" both came out pale text on a pale button: the ★ ✕ ⧉ toggles on every take
+    read as blank white boxes (seen on the Mac 2026-10-22). There the TEXT carries the state:
+    rust when ON, near-black when off. bg is still set, so the state stays testable."""
     try:
+        mac = sys.platform == "darwin"
         if on:
-            btn.configure(bg=C["rust_deep"], fg="#fff",
+            btn.configure(bg=C["rust_deep"], fg=C["rust_deep"] if mac else "#fff",
                           activebackground=C["rust_hi"], activeforeground="#fff")
         else:
-            btn.configure(bg=C["panel2"], fg=C["ink"],
+            btn.configure(bg=C["panel2"], fg="#14110f" if mac else C["ink"],
                           activebackground=C["rust"], activeforeground="#fff")
     except Exception:
         pass
@@ -2786,7 +3466,8 @@ def open_compare(root, ctx, takes):
     F = ctx.get("fonts") or {}
     fh, fsm = F.get("fh"), F.get("fsm")
     takes = list(takes or [])[:4]
-    win = tk.Toplevel(root)
+    import dock as _dock                 # a tab in the main window (Ryan: tabs)
+    win = _dock.window(root)
     win.title("Compare takes")
     win.configure(bg=C["bg"])
     try:
@@ -2968,20 +3649,31 @@ def recover_orphans(skip=None):
     skip = set(skip or ())
     recovered = []
     queued = set()
+    _bases = [None]
     try:
-        q = get_json("/queue", timeout=20)
-        queued = {it[1] for it in (q.get("queue_running") or [])}
-        queued |= {it[1] for it in (q.get("queue_pending") or [])}
+        import cards as _c
+        if _c.enabled():
+            _bases.append("http://%s:%d" % (F_HOST, _c.SECOND_PORT))
     except Exception:
         pass
+    for _qb in _bases:                 # a take in flight on card 2 is NOT an orphan
+        try:
+            q = get_json("/queue", timeout=20 if _qb is None else 4, base=_qb)
+            queued |= {it[1] for it in (q.get("queue_running") or [])}
+            queued |= {it[1] for it in (q.get("queue_pending") or [])}
+        except Exception:
+            pass
     for it in read_index():
         if it.get("images") or it.get("orphan_checked"):
             continue
         pid = it["id"]
         if pid in skip or pid in queued:
             continue                       # still in flight — not an orphan yet
+        _hp = _cards_follow(pid)
+        if _hp is None:
+            continue                       # HELD for a 'Do mine first' — not an orphan
         try:
-            rec = get_json("/history/%s" % pid, timeout=25).get(pid)
+            rec = get_json("/history/%s" % _hp, timeout=25, base=_base_for(_hp)).get(_hp)
         except Exception:
             continue                       # forge unreachable — retry next sweep
         if not rec:
@@ -3011,9 +3703,15 @@ def load_settings():
 
 
 def save_settings(d):
+    """Write the main window's settings, KEEPING every key it doesn't own ("tabs",
+    "open_on", ...). It used to write `d` alone, so the 30 s autosave erased "tabs": false
+    and the other hand-set keys within a minute of launch."""
     try:
+        cur = load_settings()
+        cur = cur if isinstance(cur, dict) else {}
+        cur.update(d or {})
         with open(SETTINGS, "w") as f:
-            json.dump(d, f, indent=1)
+            json.dump(cur, f, indent=1)
     except Exception:
         pass
 
@@ -3119,9 +3817,26 @@ def read_character(slug):
     try:
         with open(os.path.join(char_dir(slug), "character.json")) as f:
             d = json.load(f)
-        return d if isinstance(d, dict) else None
+        return _char_meta_tidy(d) if isinstance(d, dict) else None
     except Exception:
         return None
+
+
+def _char_meta_tidy(d):
+    """`picks` / `bible` saved as the TEXT of a dict ("{'Style': ...}") read back as dicts.
+    Clarence's file was written that way (cause not found); every reader then saw a string,
+    so .get() failed and casting saw an empty bible."""
+    for k in ("picks", "bible"):
+        v = d.get(k)
+        if isinstance(v, str) and v.strip().startswith("{"):
+            try:
+                import ast
+                p = ast.literal_eval(v.strip())
+                if isinstance(p, dict):
+                    d[k] = p
+            except Exception:
+                pass
+    return d
 
 
 def list_characters():
@@ -3384,6 +4099,15 @@ CHAR_OPTIONS = [
 ]
 
 # Every axis opens on its first value, which is deliberately the plain/ordinary one.
+# EXPANDED VOCABULARY (2026-10-17, char_vocab.py): "everything from a fashion model to a
+# mailman" — jobs, tribes, eras, uniforms, places, light. Appended AFTER the originals, so
+# every default, index and guard above still holds; the editor shows long axes as submenus.
+try:
+    import char_vocab as _char_vocab
+    CHAR_OPTIONS = _char_vocab.extend(CHAR_OPTIONS)
+except ImportError:                    # an old checkout without the module: the original lists
+    _char_vocab = None
+
 CHAR_OPTION_DEFAULTS = {axis: vals[0] for axis, vals in CHAR_OPTIONS}
 
 # ---- CHARACTER · the still's canvas follows its FRAMING ---------------------------
@@ -3464,11 +4188,14 @@ WEIRDO_ACTIONS = [
 
 # ---- WEIRDO · VEINS -----------------------------------------------------------------
 # Ryan, 2026-10-05: "update the weirdo section ... where the generated characters are more
-# like this" - the deadpan vein: FORMAL EUROPEAN DRESS, a GRAND EUROPEAN SQUARE,
+# like this" - the Jean-Phil / Gustav vein: FORMAL EUROPEAN DRESS, a GRAND EUROPEAN SQUARE,
 # a SIGNATURE REPEATED MOTION, played deadpan. Added as a VEIN so the classic modern/studio
 # weirdos stay; you pick which one you are rolling. ONE volume dial still, in both veins.
-WEIRDO_VEIN_DEFAULT = "Formal-European"
-WEIRDO_VEINS = ("Formal-European", "Modern")
+# 2026-10-17, Ryan: "I dont want it only to be european style. should include everything."
+# ANYTHING draws the base from the WHOLE expanded vocabulary (any job, outfit, place, light)
+# and is the default; the two older veins stay one pick away.
+WEIRDO_VEIN_DEFAULT = "Anything"
+WEIRDO_VEINS = ("Anything", "Formal-European", "Modern")
 
 # The Formal-European base. Deliberately NOT added to CHAR_OPTIONS: this slice changes only
 # what the WEIRDO roll composes, so the Character window's vocabulary and its guards (the
@@ -3543,6 +4270,7 @@ def roll_weirdo(rng=None, vein=None):
     r = rng or random
     vein = vein if vein in WEIRDO_VEINS else WEIRDO_VEIN_DEFAULT
     euro = vein == "Formal-European"
+    anything = vein == "Anything"
     picks = {}
     for axis, vals in CHAR_OPTIONS:
         if axis == "Style":
@@ -3559,18 +4287,33 @@ def roll_weirdo(rng=None, vein=None):
             picks[axis] = r.choice(WEIRDO_EURO_SETTING)
         elif euro and axis == "Lighting":
             picks[axis] = r.choice(WEIRDO_EURO_LIGHTING)
+        elif anything and axis in ("Wardrobe", "Setting", "Lighting"):
+            # past the plain studio backdrops: any outfit, any real place, any light
+            picks[axis] = r.choice(vals if axis == "Wardrobe" else
+                                   [v for v in vals if "backdrop" not in v
+                                    and "screen" not in v] or vals)
         elif axis in WEIRDO_ORDINARY:
             picks[axis] = r.choice(vals[:WEIRDO_ORDINARY[axis]])
         else:
             picks[axis] = r.choice(vals)
     # THE ONE VOLUME DIAL: half the time a Feature, half a slider driven to an extreme.
+    # ADULTS ONLY: a rolled minor never gets swimwear / lingerie (re-roll the outfit)
+    if _char_vocab is not None:
+        _tries = 0
+        while _char_vocab.conflict(picks.get("Subject"), picks.get("Wardrobe")) and _tries < 50:
+            picks["Wardrobe"] = r.choice(dict(CHAR_OPTIONS)["Wardrobe"])
+            _tries += 1
+        if _char_vocab.conflict(picks.get("Subject"), picks.get("Wardrobe")):
+            picks["Wardrobe"] = CHAR_OPTION_DEFAULTS["Wardrobe"]
     feats = [v for v in dict(CHAR_OPTIONS).get("Feature", []) if v]
     if feats and (not CHAR_SLIDERS or r.random() < 0.5):
         picks["Feature"] = r.choice(feats)
     else:
         axis, _phrases = r.choice(CHAR_SLIDERS)
         picks[axis] = r.choice((-3, 3))
-    return picks, r.choice(WEIRDO_ACTIONS_EURO if euro else WEIRDO_ACTIONS)
+    return picks, r.choice(WEIRDO_ACTIONS_EURO if euro else
+                           (list(WEIRDO_ACTIONS) + list(WEIRDO_ACTIONS_EURO)) if anything else
+                           WEIRDO_ACTIONS)
 
 
 def apply_weirdo_fit(picks, action, fit):
@@ -3807,6 +4550,10 @@ def compose_character_prompt(picks, for_video=False, action=""):
     for a motion-friendly one and splices in the character's ACTION."""
     pk = dict(CHAR_OPTION_DEFAULTS)
     pk.update({k: v for k, v in (picks or {}).items() if v is not None})
+    # ⚠️ ADULTS ONLY: swimwear / lingerie never compose onto a minor (char_vocab.conflict).
+    # The editor and the rolls already prevent the pair; this is the last word for every path.
+    if _char_vocab is not None and _char_vocab.conflict(pk.get("Subject"), pk.get("Wardrobe")):
+        pk["Wardrobe"] = CHAR_OPTION_DEFAULTS["Wardrobe"]
 
     def g(axis):
         return (pk.get(axis) or "").strip()
@@ -3829,7 +4576,11 @@ def compose_character_prompt(picks, for_video=False, action=""):
         if g(a):
             bits.append(g(a))
     if g("Wardrobe"):
-        bits.append("wearing " + g("Wardrobe"))
+        # a TYPED outfit may start with its own "wearing" — never print it twice
+        _wd = g("Wardrobe")
+        if _wd.lower().startswith("wearing "):
+            _wd = _wd[8:].strip()
+        bits.append("wearing " + _wd)
     # the absurd one goes LATE, so it is the last thing read before the pose line
     for a in ("Accessory", "Feature", "Setting", "Lighting"):
         if g(a) and g(a) != "nothing extra":
@@ -3843,6 +4594,25 @@ def compose_character_prompt(picks, for_video=False, action=""):
     return look + " " + CHAR_IDENTITY_TAIL
 
 
+def weirdo_video_prompt(picks, box_text, action=""):
+    """The VIDEO prompt for a weirdo, honouring an edited block.
+
+    ⚠️ The block box says "yours to edit once you type in it", and the STILL used the edit —
+    but the video used to rebuild from the picks and drop it, so the clip showed a different
+    person from the still. Untouched box -> exactly the picks-built video prompt, as before.
+    Edited box -> those words, with the still-photo tail swapped for the video tail + action.
+    """
+    box = (box_text or "").strip()
+    if not box or box == compose_character_prompt(picks, for_video=False).strip():
+        return compose_character_prompt(picks, for_video=True, action=action)
+    look = box
+    tail = CHAR_IDENTITY_TAIL.strip()
+    if look.endswith(tail):
+        look = look[: -len(tail)].rstrip()
+    act = (action or "").strip().rstrip(".")
+    return (look + " " + (act + ". " if act else "") + CHAR_VIDEO_TAIL).strip()
+
+
 # ------------------------------------------------- prompt enhancer (Qwen PE) --
 # qwen3.5_9b_qwen_image_2.1_pe_* are prompt REWRITERS (a small LLM), driven by the
 # TextGenerate node. Verified against this rig:
@@ -3854,8 +4624,11 @@ def compose_character_prompt(picks, for_video=False, action=""):
 #     whole budget (18k chars of reasoning at 4096, 151s) and returns an empty
 #     answer. Edit modes therefore polish the wording with pe_t2i for now.
 PE_MODELS = {"t2i": "qwen3.5_9b_qwen_image_2.1_pe_t2i.int8_convrot.safetensors",
-             "i2i": "qwen3.5_9b_qwen_image_2.1_pe_i2i.int8_convrot.safetensors"}
-PE_MAX_LEN = {"t2i": 1536, "i2i": 4096}
+             "i2i": "qwen3.5_9b_qwen_image_2.1_pe_i2i.int8_convrot.safetensors",
+             # BFL's own prompt upsampler for FLUX 3 Klein (a Qwen3.5-9B rewriter). Same
+             # TextGenerate path as the Qwen PEs, so it plugs straight in.
+             "flux3": "qwen3.5_9b_flux3_prompt_upsampler_int8_convrot.safetensors"}
+PE_MAX_LEN = {"t2i": 1536, "i2i": 4096, "flux3": 1536}
 # Measured on the dog prompt, which is what set these numbers:
 #   512  -> EMPTY          (reasoned to the ceiling, never wrote the answer)
 #   1024 -> CUT OFF        ('The image has a cinematic,')
@@ -4048,7 +4821,9 @@ def polish_prompt(text, mode="t2i", ref_path=None):
     at 512 a real prompt came back EMPTY, and at 1024 it came back CUT OFF
     mid-sentence. So try the default budget, then retry once with double the room.
     """
-    pe = "t2i"          # pe_i2i parked: see the note above
+    # FLUX 3 builds its own prompt upsampler into the pipeline, so polish with THAT when the
+    # current model is a flux3 one; every other engine keeps the Qwen t2i PE.
+    pe = "flux3" if engine_of(mode) == "flux3" else "t2i"   # pe_i2i parked: see the note above
     ref_name = None
     if pe == "i2i" and ref_path:
         ref_name = upload_image(ref_path)
@@ -4209,18 +4984,18 @@ def _ws_loop():
 # everything it needs from the app arrives in `ctx`.
 LONG_EPISODES = os.path.join(DATA, "episodes")
 LONG_DEFAULT_SCENE_S = 14.81          # 3 chained S2V chunks = 237 frames @16 fps
-# ---- the H3 engine (24 fps + the character LoRA + the audio guide) ------------------------
-# The clip Ryan judged to FOLLOW the track was H3 r2v + character_lora_v2 + AddGuide(audio).
-H3_LONGFORM_LORA = "character_lora_v2.safetensors"
+# ---- the H3 engine (24 fps + the Avery LoRA + the audio guide) ------------------------
+# The clip Ryan judged to FOLLOW the track was H3 r2v + character_lora_v1 + AddGuide(audio).
+H3_LONGFORM_LORA = "character_lora_v1.safetensors"
 # Per-piece character LoRA. ⚠️ This is NOT always the main character — a cowboy, a stranger or a faceless
 # sketch wants NO LoRA at all, and forcing one puts a face on something that has none.
 CHARACTER_LORAS = {"(none)": None,
-                   "character_lora_v2": "character_lora_v2.safetensors"}
+                   "character_lora_v1": "character_lora_v1.safetensors"}
 
 
 def long_lora(plan):
     """The LoRA for this piece. Absent = the default character LoRA (existing plans keep working);
-    an explicit "(none)" means none, which is what a piece without the main character must get."""
+    an explicit "(none)" means none, which is what a piece with no character LoRA must get."""
     h = (plan.get("treatment") or {})
     if "lora" in h:
         return CHARACTER_LORAS.get(h["lora"], h["lora"] or None)
@@ -4344,10 +5119,12 @@ def long_scene_new(n):
 
 
 # ── The locked LOOK, as a DEFAULT ──────────────────────────────────────────────────────
-# ⚠️ VERBATIM from a production style sheet. Not invented here and not paraphrased: this exact
-# register produced the approved 90s-cel frames.
-# ⚠️ It is the STYLE only. A character's identity deliberately does NOT live here.
-# A Long video must be able to have no fixed character in it, so a character in the piece-wide block would
+# ⚠️ VERBATIM from the production's own style sheet — project/intro/
+# rerender_07_09.py (`STYLE`). PIPELINE.md calls it "the style sheet is law". Not invented here
+# and not paraphrased: this exact register produced the approved 90s-cel frames.
+# ⚠️ It is the STYLE only. the character's identity (dark brown tricorn, auburn queue, blue-grey eyes,
+# colonial shirt and brown vest — `AVERY_ID` in that same file) deliberately does NOT live here.
+# A Long video must be able to have no character in it, so a character in the piece-wide block would
 # be hard-coded into every scene of every piece. Identity comes from the reference still and from
 # the scene prompts.
 DEFAULT_STYLE_BLOCK = (
@@ -4517,7 +5294,7 @@ def long_last_frame(src, out):
 
 
 
-def scoped_wheel(win, canvas):
+def scoped_wheel(win, canvas, add=False):
     """Wheel + trackpad scrolling for ONE canvas inside a sub-window (Toplevel).
 
     ⚠️ NEVER bind_all / unbind_all the wheel from a sub-window. bind_all is APP-WIDE and
@@ -4570,8 +5347,47 @@ def scoped_wheel(win, canvas):
             pass
         return "break"
 
-    win.bind("<MouseWheel>", lambda e: _on(e, False))
-    win.bind("<TouchpadScroll>", lambda e: _on(e, True))
+    # add=True: a SECOND scrolling canvas in the same window (each handler only acts when
+    # the pointer is over its own canvas, and passes the event on otherwise)
+    win.bind("<MouseWheel>", lambda e: _on(e, False), "+" if add else None)
+    win.bind("<TouchpadScroll>", lambda e: _on(e, True), "+" if add else None)
+
+
+_UI_Q = queue.Queue()
+_UI_PUMP = {"on": False}
+
+
+def ui_later(widget, fn):
+    """Run `fn` on the Tk thread soon — the ONE way a worker thread asks for a UI update.
+    Calling widget.after() from a worker touches Tcl off its thread: with a busy main loop
+    it stalls the worker (and on some builds the window). Workers queue the call; the pump
+    `start_ui_pump(root)` runs it. Before the pump is running (a driver building one window
+    alone) it falls back to widget.after(0, fn), as before."""
+    if _UI_PUMP["on"]:
+        _UI_Q.put((widget, fn))
+    else:
+        widget.after(0, fn)
+
+
+def start_ui_pump(root, every=40):
+    """Drain ui_later()'s queue on the Tk thread (launch() starts it once)."""
+    def pump():
+        for _i in range(200):
+            try:
+                w, fn = _UI_Q.get_nowait()
+            except queue.Empty:
+                break
+            try:
+                if w is None or w.winfo_exists():
+                    fn()
+            except Exception:
+                traceback.print_exc()
+        try:
+            root.after(every, pump)
+        except Exception:
+            _UI_PUMP["on"] = False
+    _UI_PUMP["on"] = True
+    root.after(every, pump)
 
 
 def open_long_video(root, ctx):
@@ -4585,7 +5401,8 @@ def open_long_video(root, ctx):
     fmono = mono["m"]
     S2V_SIZE = ctx.get("s2v_size", (640, 640))
 
-    win = tk.Toplevel(root)
+    import dock as _dock                 # a tab in the main window (Ryan: tabs)
+    win = _dock.window(root)
     win.title("Long video — Stage 1")
     win.configure(bg=C["bg"])
     # ⚠️ geometry() is a REQUEST, and Tk does NOT grow a Toplevel past it — it starves the CONTENT
@@ -5931,13 +6748,13 @@ def open_long_video(root, ctx):
                 else:
                     s["still_error"] = str(r.get("detail") or r["state"])[:90]
                 try:
-                    win.after(0, refresh)
+                    ui_later(win, refresh)
                 except Exception:
                     pass
         finally:
             st["kf_drafting"] = False
             try:
-                win.after(0, refresh)
+                ui_later(win, refresh)
             except Exception:
                 pass
 
@@ -6144,8 +6961,11 @@ def open_long_video(root, ctx):
             return None, None, _why
         return float(estimate_seconds(_m, p, _refs, warm_engine)), _m, None
 
-    def _worker(seed_for):
-        """Draft the scenes SEQUENTIALLY — one 3090, so parallel submits would just queue."""
+    def _worker(seed_for, only=None):
+        """Draft the scenes SEQUENTIALLY — one 3090, so parallel submits would just queue.
+
+        only=<index>: draft just that scene (REROLL). ⚠️ Without it REROLL ran this loop over
+        EVERY scene, kept ones included — one click re-spent the GPU on the whole episode."""
         st["drafting"] = True
         try:
             _eng0 = long_engine(plan)
@@ -6154,6 +6974,8 @@ def open_long_video(root, ctx):
                 _dur = long_scene_seconds_for(s.get("chunks", 3), _eng0, s.get("secs", 0.0))
                 _win = _t
                 _t += _dur               # advance for EVERY scene, drafted or skipped
+                if only is not None and _i != only:
+                    continue
                 if seed_for is True and s.get("keep") is not None:
                     continue
                 seed = random.randint(0, 2**31 - 1) if seed_for is True else seed_for
@@ -6163,7 +6985,7 @@ def open_long_video(root, ctx):
                     s.setdefault("takes", []).append(
                         {"seed": None, "status": "blocked: %s" % _why})
                     try:
-                        win.after(0, refresh)
+                        ui_later(win, refresh)
                     except Exception:
                         pass
                     continue
@@ -6193,13 +7015,13 @@ def open_long_video(root, ctx):
                 else:
                     t.update({"status": r["state"], "detail": r.get("detail", "")})
                 try:
-                    win.after(0, refresh)
+                    ui_later(win, refresh)
                 except Exception:
                     pass
         finally:
             st["drafting"] = False
             try:
-                win.after(0, refresh)
+                ui_later(win, refresh)
             except Exception:
                 pass
 
@@ -6263,12 +7085,15 @@ def open_long_video(root, ctx):
             except Exception:
                 pass
 
+    # REROLL = the scene selected AT CLICK TIME, and only that one (read st["sel"] now, not
+    # in the thread, or a click on another row mid-start would redirect the GPU).
     b_roll.configure(command=lambda: threading.Thread(
-        target=_worker, args=(None,), daemon=True).start())
+        target=_worker, args=(None,), kwargs={"only": st["sel"]}, daemon=True).start())
     # ⚠️ DRAFT ALL asks first — see `preflight`. REROLL stays immediate: it is ONE scene.
     b_draft.configure(command=preflight)
-    b_rollun.configure(command=lambda: threading.Thread(
-        target=_worker, args=(True,), daemon=True).start())
+    # REROLL UNKEPT is the SAME job as DRAFT ALL (_worker(True): every un-kept scene, hours
+    # of GPU), so it asks the same question first.
+    b_rollun.configure(command=preflight)
 
     def on_keep():
         s = plan["scenes"][st["sel"]]
@@ -6282,7 +7107,7 @@ def open_long_video(root, ctx):
 
     b_keep.configure(command=on_keep)
 
-    def do_stitch():
+    def _stitch_work(say):
         """STAGE 2. Keepers in order -> one file, with the bed track under it.
         ⚠️ Reports the runtime ffprobe reads off the WRITTEN FILE — not the sum of the scene
         lengths. A stitch that "should" be 29.6 s and reads 9.6 s is the bug this catches."""
@@ -6297,10 +7122,9 @@ def open_long_video(root, ctx):
                 todo.append(str(sc["n"]))
             files.append(f_)
         if todo:
-            refuse.configure(text="Cannot stitch: scenes %s have a KEPT take whose file is "
+            say("Cannot stitch: scenes %s have a KEPT take whose file is "
                                   "not on disk. Reroll and keep one for %s."
                              % (", ".join(todo), "them" if len(todo) > 1 else "it"))
-            refuse.pack(fill="x", padx=12, pady=(8, 0))
             return
         noisy = [os.path.basename(f) for f in files
                  if "Audio" in subprocess.run(
@@ -6308,11 +7132,10 @@ def open_long_video(root, ctx):
                       "-show_entries", "stream=codec_type", "-of", "csv=p=0", f],
                      capture_output=True, text=True).stdout]
         if noisy:
-            refuse.configure(text="Cannot stitch: %d source clip(s) still carry their own "
+            say("Cannot stitch: %d source clip(s) still carry their own "
                                   "audio track (%s). Scenes must be concatenated SILENT and "
                                   "the bed track added once — mixing them mangles the video."
                              % (len(noisy), ", ".join(noisy[:3])))
-            refuse.pack(fill="x", padx=12, pady=(8, 0))
             return
         d = os.path.join(LONG_EPISODES, st["name"])
         os.makedirs(d, exist_ok=True)
@@ -6327,9 +7150,8 @@ def open_long_video(root, ctx):
         r = subprocess.run(["ffmpeg", "-v", "error", "-y", "-f", "concat", "-safe", "0",
                             "-i", lst, "-c", "copy", silent], capture_output=True, text=True)
         if r.returncode != 0 or not os.path.exists(silent):
-            refuse.configure(text="Stitch failed at the concat step: %s"
+            say("Stitch failed at the concat step: %s"
                              % (r.stderr or "no output")[:180])
-            refuse.pack(fill="x", padx=12, pady=(8, 0))
             return
         out = silent
         audio = st.get("audio")
@@ -6385,14 +7207,58 @@ def open_long_video(root, ctx):
         plan["stitch_runtime"] = dur
         plan["bed_track_cut_s"] = round(max(0.0, pic - float(dur)), 3) if (pic and dur) else 0.0
         long_plan_save(st["name"], plan)
-        refuse.configure(text="Stitched %d scenes -> %s\nreal runtime %s s · audio %s%s"
+        say("Stitched %d scenes -> %s\nreal runtime %s s · audio %s%s"
                          % (n, out, dur or "?", os.path.basename(audio) if audio else "none",
                             cut))
-        refuse.pack(fill="x", padx=12, pady=(8, 0))
         try:
             subprocess.Popen(["open", out])
         except Exception:
             pass
+
+    def do_stitch(wait=False):
+        """STITCH in a worker thread: the ffprobe / concat / mux calls took the whole window
+        down for seconds (lag review). The worker only computes and writes files; the
+        message is shown from the Tk thread by polling. `wait=True` (the drivers) runs it
+        inline, as before."""
+        res = {}
+
+        def say(t):
+            res["text"] = t
+
+        def work():
+            try:
+                _stitch_work(say)
+            except Exception as exc:
+                res["text"] = "Stitch failed: %s" % exc
+            finally:
+                res["done"] = True
+
+        def show():
+            refuse.configure(text=res.get("text") or "")
+            refuse.pack(fill="x", padx=12, pady=(8, 0))
+
+        if wait:
+            work()
+            show()
+            return
+        if st.get("stitching"):
+            return
+        st["stitching"] = True
+        refuse.configure(text="Stitching %d scenes… (keep working, this takes a moment)"
+                         % len(plan["scenes"]))
+        refuse.pack(fill="x", padx=12, pady=(8, 0))
+        threading.Thread(target=work, daemon=True).start()
+
+        def poll():
+            if not res.get("done"):
+                win.after(200, poll)
+                return
+            st["stitching"] = False
+            try:
+                show()
+            except tk.TclError:
+                pass                       # the window closed while it stitched
+        win.after(200, poll)
 
     def on_stitch():
         ko, n = kept_n(), len(plan["scenes"])
@@ -6557,7 +7423,7 @@ def open_long_video(root, ctx):
     win.long_set_ref = lambda q: (st.__setitem__("ref", q),
                                   plan.__setitem__("ref", q), refresh())
     win.long_stitch_for_test = on_stitch
-    win.long_stitch = do_stitch
+    win.long_stitch = lambda: do_stitch(wait=True)
     win.long_worker = _worker
     win.long_apply_len = apply_sel_len
     win.long_len_var = len_var
@@ -6581,6 +7447,7 @@ def open_long_video(root, ctx):
     win.long_scene_params = _scene_params
     win.long_cost_facts = _cost_facts
     win.long_preflight = preflight
+    win.long_buttons = {"reroll": b_roll, "reroll_unkept": b_rollun, "draft": b_draft}
     # ⚠️ The long window's OWN duration formatter ("M:SS"). There are two `fmt` in this file — this
     # one and launch()'s ("Xm YYs") — so a driver in launch()'s scope comparing against its own
     # formatter silently mismatches. Export it and assert through THIS one.
@@ -6643,7 +7510,8 @@ def open_weirdo(root, ctx):
     except Exception:
         pass
 
-    win = tk.Toplevel(root)
+    import dock as _dock                 # a tab in the main window (Ryan: tabs)
+    win = _dock.window(root)
     win.title("Weirdo")
     win.configure(bg=C["bg"])
     win.geometry("980x900")
@@ -6910,13 +7778,13 @@ def open_weirdo(root, ctx):
                                          "prefix": "forge_lab_weirdo_still"}, None)
                 path = _first_file(meta)
                 st["still"] = path
-                win.after(0, lambda: _still_done(path, meta))
+                ui_later(win, lambda: _still_done(path, meta))
             except Exception as exc:
                 _log_err("weirdo still failed: %r" % exc)
                 # ⚠️ bind exc as a DEFAULT ARG. `except ... as exc` DELETES exc at the end of the
                 # block, so a lambda that closes over it raises NameError when it finally runs on
                 # the main loop - the failure report itself crashed, hiding the real error.
-                win.after(0, lambda _e=exc: _say("still failed: %s" % _e, warn=True))
+                ui_later(win, lambda _e=exc: _say("still failed: %s" % _e, warn=True))
             finally:
                 st["busy"] = None
 
@@ -6945,20 +7813,21 @@ def open_weirdo(root, ctx):
             return
         st["busy"] = "video"
         _say("making the video on forge\u2026 this takes a minute or two")
+        # read both boxes HERE, on the Tk thread — the edited block is what the still showed
+        st["action"] = e_action.get("1.0", "end").strip()
+        _box = t_prompt.get("1.0", "end").strip()
 
         def _work():
             try:
-                st["action"] = e_action.get("1.0", "end").strip()
-                prompt = compose_character_prompt(st["picks"], for_video=True,
-                                                  action=st["action"])
+                prompt = weirdo_video_prompt(st["picks"], _box, st["action"])
                 params = weirdo_video_params(prompt, canvas_var.get(), len_var.get())
                 pid, meta = _run("video", params, [st["still"]])
                 path = _first_file(meta)
                 st["video"] = path
-                win.after(0, lambda: _video_done(path, meta, params))
+                ui_later(win, lambda: _video_done(path, meta, params))
             except Exception as exc:
                 _log_err("weirdo video failed: %r" % exc)
-                win.after(0, lambda _e=exc: _say("video failed: %s" % _e, warn=True))
+                ui_later(win, lambda _e=exc: _say("video failed: %s" % _e, warn=True))
             finally:
                 st["busy"] = None
 
@@ -7213,7 +8082,8 @@ def open_studio(root, ctx):
     import studio_pipeline as sp
     import charpack as cp
 
-    win = tk.Toplevel(root)
+    import dock as _dock                 # a tab in the main window (Ryan: tabs)
+    win = _dock.window(root)
     win.title("Studio")
     win.configure(bg=C["bg"])
     sw, sh = win.winfo_screenwidth(), win.winfo_screenheight()
@@ -7488,7 +8358,7 @@ def open_studio(root, ctx):
                 else:
                     _say("done")
 
-            win.after(0, finish)
+            ui_later(win, finish)
         threading.Thread(target=run, daemon=True).start()
 
     def _mark_done():
@@ -7935,6 +8805,7 @@ def open_studio(root, ctx):
               label="planning shots")
 
     def _voice():
+        _save_shots(quiet=True)          # never drop a typed edit
         pj = st["pj"]
         if not pj or not pj.get("shots"):
             _say("plan shots before voicing lines", warn=True)
@@ -7943,20 +8814,28 @@ def open_studio(root, ctx):
               done=lambda sh: (_say("voiced lines"), _refresh_all()),
               label="voicing lines")
 
-    def _save_shots():
+    def _save_shots(quiet=False):
+        """Carry the shot cards' edits into the project — through sp.apply_shot_edit, so an
+        edited ACTION reaches the render prompt and an edited LINE gets re-voiced. VOICE LINES /
+        ESTIMATE / RENDER call this first (quiet), so a typed edit is never silently dropped."""
         pj = st["pj"]
         if not pj:
             return
+        n_act = n_line = 0
         for sh in (pj.get("shots") or []):
             v = st["shot_vars"].get(sh.get("n"))
             if v:
-                sh["action"] = v["action"].get()
-                sh["line"] = v["line"].get()
+                ch = sp.apply_shot_edit(sh, v["action"].get(), v["line"].get())
+                n_act += "action" in ch
+                n_line += "line" in ch
         try:
             sp.save_project(pj)
         except Exception:
             pass
-        _say("shot edits saved")
+        if not quiet:
+            _say("shot edits saved%s%s" % (
+                " · %d shot(s) will render the new action" % n_act if n_act else "",
+                " · %d line(s) will be re-voiced" % n_line if n_line else ""))
 
     def _shot_card(parent, sh, mode):
         n = sh.get("n")
@@ -8063,6 +8942,7 @@ def open_studio(root, ctx):
         st["estimate"] = e
 
     def _estimate_click():
+        _save_shots(quiet=True)          # never drop a typed edit
         pj = st["pj"]
         if not pj or not pj.get("shots"):
             _say("plan shots before pricing", warn=True)
@@ -8087,6 +8967,7 @@ def open_studio(root, ctx):
         return "\n".join(lines)
 
     def _render_all():
+        _save_shots(quiet=True)          # never drop a typed edit
         pj = st["pj"]
         if not pj or not pj.get("shots"):
             _say("plan shots before rendering", warn=True)
@@ -8123,6 +9004,7 @@ def open_studio(root, ctx):
             pass
 
     def _render_one(n):
+        _save_shots(quiet=True)          # never drop a typed edit
         pj = st["pj"]
         _work(lambda: sp.render_shot(pj, n),
               done=lambda r: (_say("shot %s -> %s" % (n, (r or {}).get("status"))), _refresh_all()),
@@ -8342,6 +9224,8 @@ def open_studio(root, ctx):
 
     win.studio_dump = _dump
     win.studio_state = st
+    win.studio_save_shots = _save_shots
+    win.studio_render_one = _render_one
     win.studio_canvas = canvas
     win.studio_new = _new_form
     win.studio_open = _open_project
@@ -8409,7 +9293,8 @@ def open_characters(root, ctx):
     fmono = mono["m"]
     load_into_form = ctx.get("load_character")
 
-    win = tk.Toplevel(root)
+    import dock as _dock                 # a tab in the main window (Ryan: tabs)
+    win = _dock.window(root)
     win.title("Characters")
     win.configure(bg=C["bg"])
     # geometry() is a REQUEST; size from the real screen and leave room for the chrome.
@@ -8693,7 +9578,16 @@ def open_characters(root, ctx):
         _w, _h = char_still_size(pick["Framing"].get(), size_var.get())
         return {"prompt": t_prompt.get("1.0", "end").strip(),
                 "width": _w, "height": _h, "resolution": max(_w, _h),
-                "steps": 25, "seed": -1, "prefix": "forge_lab_char"}
+                "steps": 25, "seed": _seed_box(), "prefix": "forge_lab_char"}
+
+    def _seed_box():
+        """The SEED box as a render seed: a whole number >= 0 locks the face; anything else is
+        -1 (a new face each render). ⚠️ It used to be ignored — every still went out at -1."""
+        try:
+            v = int((e_seed.get() or "").strip())
+        except ValueError:
+            return -1
+        return v if v >= 0 else -1
 
     def _sync_size():
         """⚠️ The canvas is DERIVED from the framing, so it has to be VISIBLE. A size that
@@ -8743,6 +9637,7 @@ def open_characters(root, ctx):
         def _work():
             try:
                 pid, _seed = submit("t2i", _params(), None)
+                job["seed"] = _seed          # the seed forge ACTUALLY used (resolved from -1)
                 _t0 = time.time()
                 while time.time() - _t0 < 1200:
                     time.sleep(3)
@@ -8781,8 +9676,9 @@ def open_characters(root, ctx):
             _say("render finished but the file is missing", warn=True)
             return
         _set_still(path)
+        ed["seed_used"] = job.get("seed")        # AFTER _set_still, which clears it
         _plog("character render: %s -> %s" % (meta.get("id"), path))
-        _say("rendered \u2014 SAVE keeps it as this character's still")
+        _say("rendered with seed %s \u2014 SAVE keeps the still and its seed" % job.get("seed"))
 
     def _say(msg, warn=False):
         status.configure(text=msg, fg=(C["ochre"] if warn else C["faint"]))
@@ -8858,6 +9754,7 @@ def open_characters(root, ctx):
 
     def _set_still(path):
         ed["still_src"] = path
+        ed["seed_used"] = None       # a chosen / loaded / cleared still carries no render seed
         still_lbl.configure(text=(os.path.basename(path) if path else "(none)"),
                             fg=(C["ink"] if path else C["faint"]))
         _thumb(path)
@@ -8920,7 +9817,10 @@ def open_characters(root, ctx):
     def _grab():
         return {"name": (e_name.get() or "").strip(),
                 "prompt": t_prompt.get("1.0", "end").rstrip("\n"),
-                "seed": e_seed.get() or "-1",
+                # the box when it locks a seed; otherwise the seed the shown still was rendered
+                # with, so a saved character can be reproduced (the box alone was always -1)
+                "seed": (str(_seed_box()) if _seed_box() >= 0 else
+                         str(ed["seed_used"]) if ed.get("seed_used") is not None else "-1"),
                 "lora": CHARACTER_LORAS.get(lora_var.get()),
                 "lora_strength": e_lstr.get() or "1.0",
                 "still_src": ed.get("still_src"),
@@ -9070,6 +9970,7 @@ def open_characters(root, ctx):
     win.char_scroll = rcan
     win.char_status = status
     win.char_params = _params
+    win.char_render = _render
     win.char_pick = pick
     win.char_on_pick = _on_pick
     win.char_size_lbl = size_lbl
@@ -9106,6 +10007,10 @@ def open_song(root, ctx):
     import tkinter as tk
     import song as _song
     try:
+        import dispatch as _dsp          # the rig's queue: a song waits its turn like anything
+    except Exception:                    # missing module -> submit straight through
+        _dsp = None
+    try:
         import director as _d0
         _llm_default = _d0.DEFAULT_MODEL
     except Exception:
@@ -9117,7 +10022,8 @@ def open_song(root, ctx):
     submit, run_state, collect = ctx["submit"], ctx["run_state"], ctx["collect"]
     btn_colors = ctx.get("btn_colors")
 
-    win = tk.Toplevel(root)
+    import dock as _dock                 # a tab in the main window (Ryan: tabs)
+    win = _dock.window(root)
     win.title("Song")
     win.configure(bg=C["bg"])
     # ⚠️ Size from the SCREEN, never hardcode: Tk starves the tail of the content instead of
@@ -9143,14 +10049,24 @@ def open_song(root, ctx):
     def say(msg, warn=False):
         status.configure(text=msg, fg=(C["ochre"] if warn else C["faint"]))
 
+    _dur_cache = {}
+
     def audio_seconds(path):
         """ffprobe duration for an audio file, or None. Never raises: a missing number must
-        not take the window down (same rule as thumb_photo)."""
+        not take the window down (same rule as thumb_photo). Cached by (path, mtime): the
+        song list probed every song on every repaint and page flip (0.3-0.7 s each time)."""
+        try:
+            key = (path, os.path.getmtime(path))
+        except Exception:
+            return None
+        if key in _dur_cache:
+            return _dur_cache[key]
         try:
             r = subprocess.run(["ffprobe", "-v", "error", "-show_entries", "format=duration",
                                 "-of", "csv=p=0", path],
                                capture_output=True, text=True, timeout=30)
-            return float((r.stdout or "").strip())
+            _dur_cache[key] = float((r.stdout or "").strip())
+            return _dur_cache[key]
         except Exception:
             return None
 
@@ -9205,39 +10121,59 @@ def open_song(root, ctx):
             say("playing %s" % os.path.basename(path))
         except Exception as exc:
             say("could not play it: %r" % exc, warn=True)
+            return
+        _song_row = next((s_ for s_ in st["songs"] if s_.get("path") == path), {})
+        st["now"] = (_song_title(_song_row) if _song_row else os.path.basename(path),
+                     time.time(), audio_seconds(path))
+        _play_tick()
 
-    # ---- header ---------------------------------------------------------------------
-    hd = tk.Frame(win, bg=C["bg"])
-    hd.pack(fill="x", padx=14, pady=(12, 2))
-    tk.Label(hd, text="SONG", bg=C["bg"], fg=C["ink"], font=fh).pack(side="left")
-    status = tk.Label(hd, text="write a style and some lyrics, then press MAKE THE SONG",
-                      bg=C["bg"], fg=C["faint"], font=fsm)
-    status.pack(side="left", padx=12)
-    btn(hd, "CLOSE", win.destroy).pack(side="right")
-    lam(win, "YuE2 — style + lyrics in, a finished song out.  It plans a melody first, "
-             "then sings it.  Pick a RECORDING and it transcribes that melody and covers it "
-             "in your style instead.",
-        fg=C["faint"]).pack(anchor="w", padx=14, pady=(0, 8))
+    # ---- header (redesign 2026-10-17) -----------------------------------------------
+    hd = tk.Frame(win, bg=C["panel"])
+    hd.pack(fill="x")
+    tk.Label(hd, text="Song", bg=C["panel"], fg=C["ink"], font=fh).pack(side="left",
+                                                                       padx=16, pady=10)
+    status = tk.Label(hd, text="pick a sound, write or paste the words, then Make the song",
+                      bg=C["panel"], fg=C["faint"], font=fsm)
+    status.pack(side="left", padx=4)
+    btn(hd, "Close", win.destroy).pack(side="right", padx=12)
+
+    # ---- the player bar: pinned at the bottom, packed BEFORE the body so it keeps its row
+    pbar = tk.Frame(win, bg=C["panel"], highlightthickness=1, highlightbackground=C["line"])
+    pbar.pack(side="bottom", fill="x")
+    play_btn = btn(pbar, "\u25b6 Play", lambda: play(st.get("made")), primary=True)
+    play_btn.pack(side="left", padx=(12, 4), pady=8)
+    btn(pbar, "\u25a0 Stop", lambda: stop_play()).pack(side="left", padx=4)
+    now_lbl = tk.Label(pbar, text="nothing playing", bg=C["panel"], fg=C["muted"], font=fsm,
+                       anchor="w")
+    now_lbl.pack(side="left", padx=10, fill="x", expand=True)
+    open_btn = btn(pbar, "Show in Finder",
+                   lambda: _open(os.path.dirname(st.get("made") or "") or None))
+    open_btn.pack(side="right", padx=12)
 
     body = tk.Frame(win, bg=C["bg"])
-    body.pack(fill="both", expand=True, padx=14, pady=(0, 14))
+    body.pack(fill="both", expand=True, padx=14, pady=(10, 10))
 
-    # LEFT: the songs.  RIGHT: the four steps.  No scrolling column to lose a control in.
-    lf = tk.Frame(body, bg=C["panel"])
-    lf.pack(side="left", fill="both", expand=True)
+    # LEFT: every song you have made.  RIGHT: one form.
+    lf = tk.Frame(body, bg=C["panel"], width=320)
+    lf.pack(side="left", fill="y")
+    lf.pack_propagate(False)
     rp = tk.Frame(body, bg=C["panel"])
-    rp.pack(side="left", fill="both", padx=(10, 0))
+    rp.pack(side="left", fill="both", expand=True, padx=(10, 0))
 
-    lam(lf, "YOUR SONGS  (this session)", font=fmono).pack(anchor="w", padx=10, pady=(10, 4))
+    lam(lf, "YOUR SONGS", font=fmono).pack(anchor="w", padx=10, pady=(10, 0))
+    lam(lf, "every song you have made, newest first", fg=C["faint"]).pack(anchor="w", padx=10,
+                                                                         pady=(0, 6))
+    pager = tk.Frame(lf, bg=C["panel"])
+    pager.pack(side="bottom", fill="x", padx=10, pady=(4, 10))
+    b_newer = btn(pager, "\u25c2 Newer", lambda: _page(-1))
+    b_newer.pack(side="left")
+    page_lbl = lam(pager, "", fg=C["faint"])
+    page_lbl.pack(side="left", padx=8)
+    b_older = btn(pager, "Older \u25b8", lambda: _page(1))
+    b_older.pack(side="right")
     songs_holder = tk.Frame(lf, bg=C["panel"])
-    songs_holder.pack(fill="both", expand=True, padx=10, pady=(0, 10))
-    empty_lbl = tk.Label(songs_holder, bg=C["panel"], fg=C["faint"], font=fsm,
-                         text="nothing yet — the songs you make appear here,",
-                         justify="left", anchor="w")
-    empty_lbl.pack(anchor="w")
-    tk.Label(songs_holder, bg=C["panel"], fg=C["faint"], font=fsm,
-             text="newest first, ready to play.", justify="left",
-             anchor="w").pack(anchor="w")
+    songs_holder.pack(fill="both", expand=True, padx=10)
+    st["page"] = 0
 
     # ---- right column: SCROLLED, so nothing can be starved when the window is resized ----
     rv_vsb = tk.Scrollbar(rp, orient="vertical")
@@ -9246,7 +10182,7 @@ def open_song(root, ctx):
                           yscrollcommand=rv_vsb.set)
     rv_canvas.pack(side="left", fill="both", expand=True)
     rv_vsb.configure(command=rv_canvas.yview)
-    rf = tk.Frame(rv_canvas, bg=C["panel"])
+    rf = tk.Frame(rv_canvas, bg=C["panel"], padx=14)
     rv_win = rv_canvas.create_window((0, 0), window=rf, anchor="nw")
     rf.bind("<Configure>", lambda e: rv_canvas.configure(scrollregion=rv_canvas.bbox("all")))
     # ⚠️ the inner frame must be told to match the canvas WIDTH or it collapses to its
@@ -9255,81 +10191,182 @@ def open_song(root, ctx):
     # scoped wheel: bind_all would hijack the main window's wheel (documented trap)
     scoped_wheel(win, rv_canvas)     # ⚠️ never bind_all/unbind_all the wheel — see scoped_wheel()
 
-    # ===== 1 · write it ==============================================================
-    tk.Label(rf, text=" 1 ", bg=C["rust"], fg="#14110f", font=fh).pack(anchor="w", pady=(6, 0))
-    lam(rf, "WRITE IT  — the band and the room, then the words").pack(anchor="w", pady=(2, 2))
+    # ---- tabs: New song | Cover a recording
+    tabs = tk.Frame(rf, bg=C["panel"])
+    tabs.pack(fill="x", pady=(10, 0))
+    tab_lbls = {}
+    for _t in ("New song", "Cover a recording"):
+        _l = tk.Label(tabs, text=_t, bg=C["panel"], fg=C["muted"], font=fsm, padx=12, pady=6,
+                      cursor="hand2")
+        _l.pack(side="left")
+        _l.bind("<Button-1>", lambda _e, t=_t: _tab(t))
+        tab_lbls[_t] = _l
+    tab_sep = tk.Frame(rf, bg=C["line"], height=1)
+    tab_sep.pack(fill="x")
 
-    pres_row = tk.Frame(rf, bg=C["panel"])
-    pres_row.pack(anchor="w", pady=(2, 2))
-    lam(pres_row, "START FROM").pack(side="left")
-    pres_var = tk.StringVar(value=_song.STYLE_PRESETS[0][0])
-    pres_menu = tk.OptionMenu(pres_row, pres_var, *[n for n, _t in _song.STYLE_PRESETS])
-    pres_menu.configure(bg=C["panel2"], fg=C["ink"], relief="flat", font=fsm,
-                        highlightthickness=0, activebackground=C["rust"], activeforeground="#fff",
-                        borderwidth=0, width=20, anchor="w")
-    pres_menu["menu"].configure(bg=C["panel2"], fg="#000000", font=fsm)   # macOS draws the popup WHITE
-    pres_menu.pack(side="left", padx=6)
-
-    # ---- cover a recording (optional) — the melody comes from the FILE ----
-    cov_row = tk.Frame(rf, bg=C["panel"])
+    # ---- cover a recording — its own tab; the melody comes from the FILE ----
+    cov_box = tk.Frame(rf, bg=C["panel"])
+    cov_row = tk.Frame(cov_box, bg=C["panel"])
     cov_row.pack(anchor="w", pady=(8, 0))
-    lam(cov_row, "COVER A RECORDING").pack(side="left")
-    btn(cov_row, "PICK A SONG\u2026", lambda: _pick_cover()).pack(side="left", padx=6)
+    btn(cov_row, "Pick a recording\u2026", lambda: _pick_cover()).pack(side="left")
     cov_lbl = tk.Label(cov_row, text="none \u2014 this will be an original", bg=C["panel"],
                        fg=C["faint"], font=fsm)
-    cov_lbl.pack(side="left", padx=4)
-    btn(cov_row, "CLEAR", lambda: _set_cover(None)).pack(side="left", padx=4)
-    lam(rf, "its melody is transcribed and re-sung in your STYLE \u2014 put the words you "
-            "want sung in LYRICS", fg=C["faint"], wraplength=520,
+    cov_lbl.pack(side="left", padx=8)
+    lam(cov_box, "its melody is transcribed and sung again in your sound \u2014 put the words "
+                 "you want sung in Lyrics", fg=C["faint"], wraplength=520,
         justify="left").pack(anchor="w", pady=(2, 0))
 
-    lam(rf, "STYLE  (%s)" % _song.STYLE_RECIPE, fg=C["faint"],
-        wraplength=520, justify="left").pack(anchor="w", pady=(2, 2))
-    t_style = tk.Text(rf, height=3, width=62, wrap="word", bg="#100e0c", fg=C["ink"],
+    # ---- the sound: a FAMILY of sounds as chips (2026-10-17: 60 sounds in 11 families + the
+    # ones you save), a Voice switch that swaps only the vocal part, the style line under them
+    pres_var = tk.StringVar(value=_song.STYLE_PRESETS[0][0])
+    MINE_F = os.path.join(DATA, "song_sounds.json")
+
+    def _mine():
+        try:
+            return [(d["name"], d["text"], "") for d in json.load(open(MINE_F))
+                    if d.get("name") and d.get("text")]
+        except Exception:
+            return []
+
+    def _families():
+        fams = [f_ for f_, _i in _song.SOUND_FAMILIES]
+        return fams + ["Mine"]
+
+    def _family_items(fam):
+        if fam == "Mine":
+            return _mine()
+        return next((it for f_, it in _song.SOUND_FAMILIES if f_ == fam), [])
+
+    snd_row = tk.Frame(rf, bg=C["panel"])
+    snd_row.pack(fill="x", pady=(10, 2))
+    lam(snd_row, "Sound").pack(side="left")
+    fam_var = tk.StringVar(value=_song.SOUND_FAMILIES[0][0])
+    fam_menu = tk.OptionMenu(snd_row, fam_var, *_families(), command=lambda *_: _paint_chips())
+    fam_menu.configure(bg=C["panel2"], fg=C["ink"], relief="flat", font=fsm,
+                       highlightthickness=0, borderwidth=0, width=14,
+                       activebackground=C["rust"])
+    fam_menu["menu"].configure(bg=C["panel2"], fg="#000000", font=fsm)
+    fam_menu.pack(side="left", padx=(6, 10))
+    voice_var = tk.StringVar(value="as the sound")
+    lam(snd_row, "Voice").pack(side="left")
+    voice_menu = tk.OptionMenu(snd_row, voice_var, *_song.VOICE_SWITCH.keys(),
+                               command=lambda *_: _apply_voice())
+    voice_menu.configure(bg=C["panel2"], fg=C["ink"], relief="flat", font=fsm,
+                         highlightthickness=0, borderwidth=0, width=11,
+                         activebackground=C["rust"])
+    voice_menu["menu"].configure(bg=C["panel2"], fg="#000000", font=fsm)
+    voice_menu.pack(side="left", padx=(6, 0))
+    chips = tk.Frame(rf, bg=C["panel"])
+    chips.pack(fill="x")
+    for _i in range(4):
+        chips.columnconfigure(_i, weight=1, uniform="ch")
+    chip_lbls = {}
+    snd = {"text": _song.STYLE_PRESETS[0][1], "vocal": _song._LANES_VOCAL.get(
+        _song.STYLE_PRESETS[0][0], "")}
+
+    def _paint_chips():
+        for w_ in chips.winfo_children():
+            w_.destroy()
+        chip_lbls.clear()
+        items = _family_items(fam_var.get())
+        if not items:
+            lam(chips, "no saved sounds yet \u2014 shape a style line, then Save this sound",
+                fg=C["faint"]).grid(row=0, column=0, columnspan=4, sticky="w", pady=4)
+        for _i, (_n, _t, _v) in enumerate(items[:12]):
+            on = _n == pres_var.get()
+            _l = tk.Label(chips, text=_n, bg=C["ink"] if on else C["panel2"],
+                          fg="#14110f" if on else C["ink"], font=fsm, padx=6, pady=5,
+                          cursor="hand2", wraplength=118, justify="center",
+                          highlightthickness=1,
+                          highlightbackground=C["ochre"] if on else C["line"])
+            _l.grid(row=_i // 4, column=_i % 4, sticky="nsew", padx=(0, 4), pady=(0, 4))
+            _l.bind("<Button-1>", lambda _e, n=_n: pres_var.set(n))
+            chip_lbls[_n] = _l
+
+    def _apply_voice():
+        """Swap only the vocal clause of the current sound (or add one)."""
+        cur_txt = t_style.get("1.0", "end").strip()
+        base = snd["text"] if cur_txt == st.get("_voiced", snd["text"]) else cur_txt
+        out = _song.with_voice(base, snd["vocal"] if base == snd["text"] else "",
+                               voice_var.get())
+        t_style.delete("1.0", "end")
+        t_style.insert("1.0", out)
+        st["_voiced"] = out
+        _refresh_est()
+
+    def _save_sound():
+        from tkinter import simpledialog            # handler-time import (AGENTS.md)
+        txt = t_style.get("1.0", "end").strip()
+        if not txt:
+            say("the style line is empty \u2014 nothing to save", warn=True)
+            return
+        nm = simpledialog.askstring("Save this sound", "Name it:", parent=win,
+                                    initialvalue=txt.split(",")[1].strip()[:28]
+                                    if "," in txt else txt[:28])
+        if not nm:
+            return
+        _save_sound_as(nm.strip(), txt)
+
+    def _save_sound_as(nm, txt):
+        items = [{"name": n, "text": t} for n, t, _v in _mine() if n != nm]
+        items.insert(0, {"name": nm, "text": txt})
+        tmp = MINE_F + ".tmp"
+        with open(tmp, "w") as fh_:
+            json.dump(items, fh_, indent=1)
+        os.replace(tmp, MINE_F)
+        fam_var.set("Mine")
+        pres_var.set(nm)
+        _paint_chips()
+        say("saved \u201c%s\u201d to Mine" % nm)
+
+    sty_row = tk.Frame(rf, bg=C["panel"])
+    sty_row.pack(fill="x", pady=(4, 2))
+    btn(sty_row, "Save this sound", lambda: _save_sound()).pack(side="right")
+    lam(sty_row, "style \u2014 %s" % _song.STYLE_RECIPE, fg=C["faint"], wraplength=420,
+        justify="left").pack(side="left", anchor="w")
+    t_style = tk.Text(rf, height=2, width=62, wrap="word", bg="#100e0c", fg=C["ink"],
                       relief="flat", font=f, padx=6, pady=4, insertbackground=C["ink"])
-    t_style.pack(anchor="w")
+    t_style.pack(fill="x")
     t_style.insert("1.0", _song.STYLE_PRESETS[0][1])
 
-    # ---- write the words with a LOCAL model on the rig (no API, no cost) ----
+    # ---- the words: a LOCAL model on the rig writes them (no API, no cost) ----
     about_row = tk.Frame(rf, bg=C["panel"])
-    about_row.pack(anchor="w", pady=(8, 0))
-    lam(about_row, "ABOUT").pack(side="left")
+    about_row.pack(fill="x", pady=(10, 0))
+    lam(about_row, "What's it about?").pack(side="left")
     about_var = tk.StringVar(value="")
-    tk.Entry(about_row, textvariable=about_var, width=30, bg="#100e0c", fg=C["ink"],
-             relief="flat", font=fsm, insertbackground=C["ink"]).pack(side="left", padx=6)
-    write_btn = btn(about_row, "WRITE LYRICS", lambda: _write_lyrics())
+    tk.Entry(about_row, textvariable=about_var, width=28, bg="#100e0c", fg=C["ink"],
+             relief="flat", font=fsm, insertbackground=C["ink"]).pack(side="left", padx=6,
+                                                                      fill="x", expand=True)
+    write_btn = btn(about_row, "Write lyrics", lambda: _write_lyrics())
     write_btn.pack(side="left", padx=4)
-    lam(about_row, "what is it about?", fg=C["faint"]).pack(side="left", padx=6)
 
-    # WHICH local model writes it. Measured 2026-10-09 on this task: both Qwen 27B builds
-    # pass the validator first try; Mistral-Small (abliterated) returned ONE prose paragraph
-    # with no section tags on both briefs — it ignored the format outright. The picker is
-    # here so that judgement can be re-made rather than inherited.
-    mrow = tk.Frame(rf, bg=C["panel"])
-    mrow.pack(anchor="w", pady=(2, 0))
-    lam(mrow, "MODEL").pack(side="left")
-    lm_var = tk.StringVar(value=_llm_default)
-    lm_menu = tk.OptionMenu(mrow, lm_var, _llm_default)
-    lm_menu.configure(bg=C["panel2"], fg=C["ink"], relief="flat", font=fsm,
-                      highlightthickness=0, activebackground=C["rust"],
-                      activeforeground="#fff", borderwidth=0, width=26, anchor="w")
-    lm_menu["menu"].configure(bg=C["panel2"], fg="#000000", font=fsm)
-    lm_menu.pack(side="left", padx=6)
-    lm_note = lam(mrow, "checking the rig\u2026", fg=C["faint"])
-    lm_note.pack(side="left", padx=6)
-
-    lam(rf, "LYRICS  (only the words to be sung — leave it empty for an instrumental)",
-        fg=C["faint"], wraplength=520, justify="left").pack(anchor="w", pady=(6, 2))
+    lyr_head = tk.Frame(rf, bg=C["panel"])
+    lyr_head.pack(fill="x", pady=(10, 2))
+    lam(lyr_head, "Lyrics \u2014 leave empty for an instrumental").pack(side="left")
+    reuse_btn = btn(lyr_head, "Reuse last words", lambda: _reuse_words())
+    reuse_btn.pack(side="right")
+    btn(lyr_head, "+ section tags", lambda: _insert_tags()).pack(side="right", padx=4)
+    reuse_hint = lam(rf, "", fg=C["faint"], wraplength=520, justify="left")
+    reuse_hint.pack(anchor="w")
     t_lyr = tk.Text(rf, height=11, width=62, wrap="word", bg="#100e0c", fg=C["ink"],
                     relief="flat", font=f, padx=6, pady=4, insertbackground=C["ink"])
-    t_lyr.pack(anchor="w")
+    t_lyr.pack(fill="x")
 
     def _load_preset(*_a):
         name = pres_var.get()
-        for n, txt in _song.STYLE_PRESETS:
+        for n_, l_ in chip_lbls.items():
+            on = n_ == name
+            l_.configure(bg=C["ink"] if on else C["panel2"], fg="#14110f" if on else C["ink"],
+                         highlightbackground=C["ochre"] if on else C["line"])
+        for n, txt, voc in _family_items(fam_var.get()) + [
+                (n_, t_, v_) for _f, n_, t_, v_ in _song.all_sounds()]:
             if n == name:
+                snd.update(text=txt, vocal=voc)
+                st["_voiced"] = txt
                 t_style.delete("1.0", "end")
                 t_style.insert("1.0", txt)
+                if voice_var.get() != "as the sound":
+                    _apply_voice()
                 _refresh_est()
                 return
 
@@ -9343,23 +10380,45 @@ def open_song(root, ctx):
         t_lyr.insert("1.0", _song.LYRIC_TEMPLATE)
         _refresh_est()
 
-    tag_row = tk.Frame(rf, bg=C["panel"])
-    tag_row.pack(anchor="w", pady=(4, 0))
-    btn(tag_row, "SECTION TAGS", _insert_tags).pack(side="left")
-    reuse_btn = btn(tag_row, "REUSE WORDS", lambda: _reuse_words())
-    reuse_btn.pack(side="left", padx=4)
-    reuse_hint = lam(tag_row, "brings back the words you used last \u2014 you should never "
-                              "have to type the same lyrics twice", fg=C["faint"],
-                     wraplength=300, justify="left")
-    reuse_hint.pack(side="left", padx=8)
+    # ---- length + MAKE on one row
+    make_row = tk.Frame(rf, bg=C["panel"])
+    make_row.pack(fill="x", pady=(12, 0))
+    lam(make_row, "Length").pack(side="left")
+    dur_var = tk.IntVar(value=int(_song.YUE2_DEFAULT_SECONDS))
+    dur_scale = tk.Scale(make_row, from_=15, to=300, resolution=5, orient="horizontal",
+                         variable=dur_var, length=180, bg=C["panel"], fg=C["ink"],
+                         troughcolor=C["panel2"], highlightthickness=0, font=fsm,
+                         activebackground=C["rust"], showvalue=False,
+                         command=lambda *a: _refresh_est())
+    dur_scale.pack(side="left", padx=6)
+    dur_lbl = tk.Label(make_row, text="", bg=C["panel"], fg=C["ink"], font=fsm, width=9)
+    dur_lbl.pack(side="left")
+    make_btn = tk.Button(make_row, text="Make the song", command=lambda: _make(),
+                         bg=C["ochre"], fg="#14110f", activebackground="#d9b45e",
+                         activeforeground="#14110f", relief="flat", borderwidth=0, font=fh,
+                         padx=14, pady=8, highlightthickness=0)
+    make_btn.pack(side="right")
+    est_lbl = tk.Label(rf, text="", bg=C["panel"], fg=C["faint"], font=fsm)
+    est_lbl.pack(anchor="e", pady=(2, 0))
 
-    # ===== 2 · shape it ==============================================================
-    tk.Label(rf, text=" 2 ", bg=C["rust"], fg="#14110f", font=fh).pack(anchor="w", pady=(14, 0))
-    lam(rf, "SHAPE IT").pack(anchor="w", pady=(2, 2))
+    # ---- Advanced: PLAN, SEED, the lyric MODEL — folded
+    adv_t = tk.Label(rf, text="Advanced \u2014 plan, seed, lyric model \u25b8", bg=C["panel"],
+                     fg=C["ochre"], font=fsm, cursor="hand2")
+    adv_t.pack(anchor="w", pady=(10, 4))
+    adv = tk.Frame(rf, bg=C["panel"])
 
-    plan_row = tk.Frame(rf, bg=C["panel"])
+    def _adv(_e=None):
+        if adv.winfo_manager():
+            adv.pack_forget()
+            adv_t.configure(text="Advanced \u2014 plan, seed, lyric model \u25b8")
+        else:
+            adv.pack(fill="x", after=adv_t)
+            adv_t.configure(text="Advanced \u25be")
+    adv_t.bind("<Button-1>", _adv)
+
+    plan_row = tk.Frame(adv, bg=C["panel"])
     plan_row.pack(anchor="w", pady=(2, 2))
-    lam(plan_row, "PLAN").pack(side="left")
+    lam(plan_row, "Plan").pack(side="left")
     plan_btns = {}
     st["plan"] = "full"
 
@@ -9380,54 +10439,55 @@ def open_song(root, ctx):
         plan_btns[_k] = _b
     _style_toggle(plan_btns["full"], True, C)
 
-    dur_row = tk.Frame(rf, bg=C["panel"])
-    dur_row.pack(anchor="w", pady=(8, 0))
-    lam(dur_row, "LENGTH").pack(side="left")
-    dur_var = tk.IntVar(value=int(_song.YUE2_DEFAULT_SECONDS))
-    dur_scale = tk.Scale(dur_row, from_=15, to=300, resolution=5, orient="horizontal",
-                         variable=dur_var, length=300, bg=C["panel"], fg=C["ink"],
-                         troughcolor=C["panel2"], highlightthickness=0, font=fsm,
-                         activebackground=C["rust"], showvalue=False,
-                         command=lambda *a: _refresh_est())
-    dur_scale.pack(side="left", padx=6)
-    dur_lbl = tk.Label(dur_row, text="", bg=C["panel"], fg=C["ink"], font=fsm, width=9)
-    dur_lbl.pack(side="left")
-
-    seed_row = tk.Frame(rf, bg=C["panel"])
+    seed_row = tk.Frame(adv, bg=C["panel"])
     seed_row.pack(anchor="w", pady=(4, 0))
-    lam(seed_row, "SEED").pack(side="left")
+    lam(seed_row, "Seed").pack(side="left")
     seed_var = tk.StringVar(value="-1")
     tk.Entry(seed_row, textvariable=seed_var, width=14, bg="#100e0c", fg=C["ink"],
              relief="flat", font=fsm, insertbackground=C["ink"]).pack(side="left", padx=6)
-    btn(seed_row, "DICE", lambda: seed_var.set(str(random.randint(0, 2**31 - 1)))).pack(side="left")
+    btn(seed_row, "Dice", lambda: seed_var.set(str(random.randint(0, 2**31 - 1)))).pack(side="left")
     lam(seed_row, "-1 rolls a new one each time", fg=C["faint"]).pack(side="left", padx=6)
 
-    # ===== 3 · make it ===============================================================
-    tk.Label(rf, text=" 3 ", bg=C["rust"], fg="#14110f", font=fh).pack(anchor="w", pady=(14, 0))
-    lam(rf, "MAKE IT").pack(anchor="w", pady=(2, 2))
-    make_row = tk.Frame(rf, bg=C["panel"])
-    make_row.pack(anchor="w", pady=(2, 0))
-    make_btn = btn(make_row, "MAKE THE SONG", lambda: _make(), primary=True)
-    make_btn.pack(side="left")
-    est_lbl = tk.Label(make_row, text="", bg=C["panel"], fg=C["faint"], font=fsm)
-    est_lbl.pack(side="left", padx=10)
-    lam(rf, "a song is ~10x faster than it plays: the model writes it, it does not "
-            "render it frame by frame", fg=C["faint"], wraplength=520,
-        justify="left").pack(anchor="w", pady=(2, 0))
+    # WHICH local model writes the words. Measured 2026-10-09: both Qwen 27B builds pass the
+    # validator first try; Mistral-Small (abliterated) ignored the section-tag format outright.
+    mrow = tk.Frame(adv, bg=C["panel"])
+    mrow.pack(anchor="w", pady=(4, 0))
+    lam(mrow, "Lyric model").pack(side="left")
+    lm_var = tk.StringVar(value=_llm_default)
+    lm_menu = tk.OptionMenu(mrow, lm_var, _llm_default)
+    lm_menu.configure(bg=C["panel2"], fg=C["ink"], relief="flat", font=fsm,
+                      highlightthickness=0, activebackground=C["rust"],
+                      activeforeground="#fff", borderwidth=0, width=26, anchor="w")
+    lm_menu["menu"].configure(bg=C["panel2"], fg="#000000", font=fsm)
+    lm_menu.pack(side="left", padx=6)
+    lm_note = lam(mrow, "checking the rig\u2026", fg=C["faint"])
+    lm_note.pack(side="left", padx=6)
 
-    # ===== 4 · hear it ===============================================================
-    tk.Label(rf, text=" 4 ", bg=C["rust"], fg="#14110f", font=fh).pack(anchor="w", pady=(14, 0))
-    lam(rf, "HEAR IT").pack(anchor="w", pady=(2, 2))
-    hear_row = tk.Frame(rf, bg=C["panel"])
-    hear_row.pack(anchor="w", pady=(2, 0))
-    play_btn = btn(hear_row, "\u25b6 PLAY", lambda: play(st.get("made")), primary=True)
-    play_btn.pack(side="left")
-    btn(hear_row, "\u25a0 STOP", stop_play).pack(side="left", padx=4)
-    open_btn = btn(hear_row, "OPEN", lambda: _open(st.get("made")))
-    open_btn.pack(side="left", padx=4)
-    btn(hear_row, "FOLDER", lambda: _open(os.path.dirname(st.get("made") or "") or None)
-        ).pack(side="left", padx=4)
-    lam(rf, "", fg=C["faint"]).pack(anchor="w", pady=(6, 0))
+    def _tab(t):
+        st["tab"] = t
+        for n_, l_ in tab_lbls.items():
+            on = n_ == t
+            l_.configure(fg=C["ink"] if on else C["muted"], font=fh if on else fsm)
+        if t == "Cover a recording":
+            cov_box.pack(fill="x", after=tab_sep)
+        else:
+            cov_box.pack_forget()
+            if st.get("cover"):
+                _set_cover(None)       # New song = an original: drop the picked recording
+
+    # ---- the player bar's clock
+    def _play_tick():
+        pl = st.get("player")
+        if pl is None or pl.poll() is not None:
+            if st.get("now"):
+                now_lbl.configure(text="\u25a0 %s" % st["now"][0])
+            return
+        name, t0, length = st["now"]
+        el = time.time() - t0
+        now_lbl.configure(text="\u25b6 %s   %d:%02d%s" % (
+            name, int(el) // 60, int(el) % 60,
+            (" / %d:%02d" % (int(length) // 60, int(length) % 60)) if length else ""))
+        win.after(500, _play_tick)
 
     def _open(path):
         if not path:
@@ -9466,9 +10526,63 @@ def open_song(root, ctx):
             parts.append(song.get("plan_label") or "full")
         return "  \u00b7  ".join(parts)
 
+    def _song_title(song):
+        """A song's name for people: its first sung line, else its style."""
+        for ln in (song.get("lyrics") or "").splitlines():
+            ln = ln.strip()
+            if ln and not (ln.startswith("[") and ln.endswith("]")):
+                return ln[:42]
+        return ((song.get("style") or song.get("name") or "a song").split(",")[0])[:42]
+
+    def _load_library():
+        """EVERY song in the run index (newest first) — the list used to start empty each
+        time the window opened ("this session" only)."""
+        out = []
+        try:
+            items = read_index()
+        except Exception:
+            items = []
+        for it in items:
+            if it.get("mode") != "song":
+                continue
+            rid = it.get("id") or ""
+            aud = [x for x in (it.get("images") or [])
+                   if (x.get("file") or "").lower().endswith((".flac", ".wav", ".mp3", ".ogg"))]
+            if not aud:
+                continue
+            path = os.path.join(RUNS, rid, aud[0]["file"])
+            if not os.path.exists(path):
+                continue
+            _sc = next((t_ for t_ in (it.get("text_files") or []) if t_.endswith(".txt")), None)
+            out.append({"path": path, "name": aud[0]["file"], "id": rid,
+                        "seconds": it.get("seconds"), "seed": it.get("seed"),
+                        "style": it.get("style"), "lyrics": it.get("lyrics"),
+                        "cover": bool(it.get("cover")), "source": it.get("source"),
+                        "score": (os.path.join(RUNS, rid, _sc) if _sc else None),
+                        "started": it.get("started"),
+                        "plan_label": (it.get("song_mode") or "full") if it.get("plan") else "off"})
+        out.sort(key=lambda s_: -(s_.get("started") or 0))
+        return out
+
+    SONG_PAGE = 8           # 2026-10-21: two-line rows; at the Mac's window height a 9th was cut off
+
+    def _page(delta):
+        n_pages = max(1, (len(st["songs"]) + SONG_PAGE - 1) // SONG_PAGE)
+        st["page"] = max(0, min(n_pages - 1, st.get("page", 0) + delta))
+        _render_songs()
+
     def _render_songs():
         for w in songs_holder.winfo_children():
             w.destroy()
+        n_pages = max(1, (len(st["songs"]) + SONG_PAGE - 1) // SONG_PAGE)
+        st["page"] = max(0, min(n_pages - 1, st.get("page", 0)))
+        page_lbl.configure(text=("page %d of %d" % (st["page"] + 1, n_pages)) if n_pages > 1
+                           else "")
+        for b_, on in ((b_newer, st["page"] > 0), (b_older, st["page"] < n_pages - 1)):
+            if on:
+                b_.pack(side="left" if b_ is b_newer else "right")
+            else:
+                b_.pack_forget()
         if not st["songs"]:
             tk.Label(songs_holder, bg=C["panel"], fg=C["faint"], font=fsm, anchor="w",
                      justify="left", text="nothing yet — the songs you make appear here,"
@@ -9476,12 +10590,21 @@ def open_song(root, ctx):
             tk.Label(songs_holder, bg=C["panel"], fg=C["faint"], font=fsm, anchor="w",
                      justify="left", text="newest first, ready to play.").pack(anchor="w")
             return
-        for song in st["songs"]:
+        _a = st["page"] * SONG_PAGE
+        for song in st["songs"][_a:_a + SONG_PAGE]:
             row = tk.Frame(songs_holder, bg=C["panel"], highlightthickness=1,
                            highlightbackground=C["line"])
             row.pack(fill="x", pady=3)
-            rr = tk.Frame(row, bg=C["panel"])
-            rr.pack(side="right", padx=6, pady=4)
+            # Ryan 2026-10-21: "I cant see the song titles". The buttons used to share ONE
+            # line with the title and, packed first, squeezed it to nothing on the Mac (Aqua
+            # buttons are wide). Now the title has the whole top line; the details and the
+            # buttons share the line under it.
+            _top = tk.Frame(row, bg=C["panel"])
+            _top.pack(fill="x", padx=8, pady=(5, 0))
+            _bot = tk.Frame(row, bg=C["panel"])
+            _bot.pack(fill="x", padx=(8, 6), pady=(0, 4))
+            rr = tk.Frame(_bot, bg=C["panel"])
+            rr.pack(side="right")
             tk.Button(rr, text="\u25b6", bg=C["panel2"], fg=C["ink"],
                       activebackground=C["rust"], activeforeground="#fff", relief="flat",
                       font=fsm, padx=8, pady=1, borderwidth=0,
@@ -9500,12 +10623,30 @@ def open_song(root, ctx):
                 # ⚠️ THE point of this button: to cover or re-roll a song you made earlier you
                 # need ITS words, and they are already in the take — retyping them was never
                 # necessary, the app just never offered them back.
-                tk.Button(rr, text="WORDS", bg=C["panel2"], fg=C["ink"],
+                tk.Button(rr, text="Reuse", bg=C["panel2"], fg=C["ink"],
                           activebackground=C["rust"], activeforeground="#fff", relief="flat",
                           font=fsm, padx=6, pady=1, borderwidth=0,
                           command=lambda s=song: _load_words(s)).pack(side="left", padx=3)
-            tk.Label(row, text=_run_line(song), bg=C["panel"], fg=C["ink"], font=fsm,
-                     justify="left", anchor="w", wraplength=330).pack(side="left", padx=8, pady=4)
+            if (song.get("lyrics") or "").strip() and ctx.get("music_video"):
+                # MUSIC VIDEO of THIS song: Quick, with a character singing it
+                tk.Button(rr, text="VIDEO", bg=C["panel2"], fg=C["ink"],
+                          activebackground=C["rust"], activeforeground="#fff", relief="flat",
+                          font=fsm, padx=6, pady=1, borderwidth=0,
+                          command=lambda s=song: ctx["music_video"](
+                              s["path"], _song_title(s), s.get("lyrics") or "")).pack(
+                    side="left", padx=3)
+            _when = (time.strftime("%b %d", time.localtime(song["started"]))
+                     if song.get("started") else "today")
+            _kind = ("cover" if song.get("cover") else
+                     "instrumental" if not (song.get("lyrics") or "").strip() else "original")
+            _got = audio_seconds(song["path"])
+            tk.Label(_top, text=_song_title(song), bg=C["panel"], fg=C["ink"], font=fsm,
+                     justify="left", anchor="w", wraplength=270).pack(fill="x", anchor="w")
+            # short, so it still fits beside the buttons: "original" is the norm, not shown
+            tk.Label(_bot, text=" \u00b7 ".join(x for x in (
+                "" if _kind == "original" else _kind, ("%d:%02d" % (int(_got) // 60, int(_got) % 60)) if _got else "", _when)
+                if x), bg=C["panel"], fg=C["faint"], font=fsm, anchor="w",
+                justify="left").pack(side="left", anchor="w")
 
     def _fetch_models():
         """Chat models on the rig's Ollama. Never raises: no list just means no choice."""
@@ -9667,6 +10808,8 @@ def open_song(root, ctx):
         letting him set a combination the cover graph cannot honour."""
         st["cover"] = path or None
         if path:
+            if st.get("tab") != "Cover a recording":
+                _tab("Cover a recording")
             cov_lbl.configure(text=os.path.basename(path), fg=C["ink"])
             _set_plan("melody")
             for _k, _b in plan_btns.items():
@@ -9675,8 +10818,8 @@ def open_song(root, ctx):
             secs = audio_seconds(path)
             if secs:
                 dur_var.set(int(max(15, min(300, round(secs)))))
-            make_btn.configure(text="MAKE THE COVER")
-            reuse_btn.configure(text="COVER'S WORDS")
+            make_btn.configure(text="Make the cover")
+            reuse_btn.configure(text="Cover's words")
             reuse_hint.configure(text="brings back the words of the song you are covering")
             # ⚠️ Fill them ONLY when the lyric box is empty. Overwriting words he has already
             # written would be the app deciding for him — and for a cover the words are often
@@ -9687,7 +10830,7 @@ def open_song(root, ctx):
                 say("cover mode \u2014 words loaded from %s; edit them freely"
                     % os.path.basename(path))
             elif _cov:
-                say("cover mode \u2014 its words are one press away (COVER'S WORDS)")
+                say("cover mode \u2014 its words are one press away (Cover's words)")
             else:
                 say("cover mode \u2014 that recording is not one of ours, so the words are "
                     "yours to supply")
@@ -9695,10 +10838,9 @@ def open_song(root, ctx):
             cov_lbl.configure(text="none \u2014 this will be an original", fg=C["faint"])
             for _b in plan_btns.values():
                 _b.configure(state="normal")
-            make_btn.configure(text="MAKE THE SONG")
-            reuse_btn.configure(text="REUSE WORDS")
-            reuse_hint.configure(text="brings back the words you used last \u2014 you should "
-                                      "never have to type the same lyrics twice")
+            make_btn.configure(text="Make the song")
+            reuse_btn.configure(text="Reuse last words")
+            reuse_hint.configure(text="")
         _refresh_est()
 
     def _pick_cover():
@@ -9714,7 +10856,8 @@ def open_song(root, ctx):
 
     def _make():
         if st["busy"]:
-            say("already making one — it is about 20 s", warn=True)
+            # (it said "about 20 s" for every song, even a 2-minute one)
+            say("already making one \u2014 about %.0f s in all" % _estimate(), warn=True)
             return
         style = t_style.get("1.0", "end").strip()
         lyrics = t_lyr.get("1.0", "end").strip()
@@ -9733,19 +10876,58 @@ def open_song(root, ctx):
                                        seconds=float(dur_var.get()),
                                        seed=seed_var.get().strip() or "-1", plan=plan)
         _save_state()          # a submitted run's words are worth keeping
-        try:
-            pid, seed = submit("song", p, None)
-        except Exception as exc:
-            say("forge refused it: %r" % exc, warn=True)
+
+        def _start(port=None):
+            """Submit, then hand over to _poll. Runs on the TK thread — a waiting worker gets
+            here through ui_later(), never by calling win.after() from itself."""
+            try:
+                if port:
+                    p["port"] = int(port)      # the lane the queue checked and claimed
+                pid, seed = submit("song", p, None)
+            except Exception as exc:
+                st["busy"] = False
+                make_btn.configure(state="normal")
+                say("forge refused it: %r" % exc, warn=True)
+                return
+            st.update({"busy": True, "pid": pid, "seed": seed, "t0": time.time(),
+                       "was_cover": bool(cover)})
+            seed_var.set(str(seed))
+            make_btn.configure(state="disabled")
+            say(("making the cover\u2026 (seed %s, melody from %s)"
+                 % (seed, os.path.basename(cover))) if cover
+                else "making it\u2026 (seed %s, %s)" % (seed, st["plan"]))
+            win.after(1200, _poll)
+
+        # 2026-10-22: a song is a QUEUE entry like every other render. The window keeps its own
+        # watch/collect/progress (and its own progress line); the queue lends it a card, and
+        # while it waits that is what the window says — with the row visible on the Home tab.
+        gate = None
+        if _dsp is not None:
+            gate = _dsp.admit("Song — %s" % ((style[:26] or "").strip() or "a song"),
+                              need="song", est_s=_estimate())
+        if gate is None or not _dsp.running():
+            if gate is not None:
+                gate.go_now()                  # no scheduler in this session: submit now
+            _start()
             return
-        st.update({"busy": True, "pid": pid, "seed": seed, "t0": time.time(),
-                   "was_cover": bool(cover)})
-        seed_var.set(str(seed))
+        st["gate"] = gate
+        st["busy"] = True
         make_btn.configure(state="disabled")
-        say("making the cover\u2026 (seed %s, melody from %s)"
-            % (seed, os.path.basename(cover)) if cover
-            else "making it\u2026 (seed %s, %s)" % (seed, st["plan"]))
-        win.after(1200, _poll)
+        say("waiting for a card — it is in the queue on the Home tab")
+
+        def _waiter():
+            ok = gate.wait(lambda m: ui_later(win, lambda: say(m)))
+
+            def _stop():
+                st["busy"] = False
+                st.pop("gate", None)
+                make_btn.configure(state="normal")
+                say("you took that song off the queue", warn=True)
+            if ok:
+                ui_later(win, lambda: _start(gate.port))
+            else:
+                ui_later(win, _stop)
+        threading.Thread(target=_waiter, daemon=True).start()
 
     def _poll():
         """Poll the run the way every other workspace does — run_state() then collect(),
@@ -9765,6 +10947,14 @@ def open_song(root, ctx):
             return
         st["busy"] = False
         make_btn.configure(state="normal")
+        _g = st.pop("gate", None)
+        if _g is not None:
+            # the song is FINISHED — the card goes back to the queue now, not after the
+            # download below (a running entry is what holds a card).
+            if state == "error":
+                _g.fail(rs.get("detail") or "the song engine errored")
+            else:
+                _g.done()
         if state == "error":
             say("forge error: %s" % (rs.get("detail") or "see the console"), warn=True)
             return
@@ -9788,7 +10978,10 @@ def open_song(root, ctx):
                 "cover": bool(meta.get("cover")), "source": meta.get("source"),
                 "score": (os.path.join(RUNS, rid, _score) if _score else None),
                 "plan_label": (meta.get("song_mode") or "full") if meta.get("plan") else "off"}
+        song["started"] = time.time()
+        st["songs"] = [s_ for s_ in st["songs"] if s_.get("id") != rid]
         st["songs"].insert(0, song)
+        st["page"] = 0
         st["made"] = path
         _render_songs()
         got = audio_seconds(path)
@@ -9797,6 +10990,10 @@ def open_song(root, ctx):
     # initial paint + the driver's hooks
     _refresh_est()
     _restore_words()          # the words come back with the window, so nothing is retyped
+    st["songs"] = _load_library()
+    _render_songs()
+    _tab("New song")
+    _paint_chips()                            # the current family, its chip lit
 
     def _set(style=None, lyrics=None, plan=None, seconds=None):
         """Drive the window from a test (or a future headless caller) without poking at
@@ -9824,6 +11021,8 @@ def open_song(root, ctx):
         "estimate_text": est_lbl.cget("text"),
         "plan_labels": [b.cget("text") for b in plan_btns.values()],
         "presets": [n for n, _t in _song.STYLE_PRESETS],
+        "family": fam_var.get(), "voice": voice_var.get(),
+        "chip_names": list(chip_lbls),
         "canvas_scrolls": bool(rv_canvas.cget("scrollregion")),
         "cover": st.get("cover"), "make_text": make_btn.cget("text"),
         "words_chars": len(t_style.get("1.0", "end").strip())
@@ -9859,6 +11058,13 @@ def open_song(root, ctx):
     win.song_play = lambda: play(st.get("made"))
     win.song_stop = stop_play
     win.song_lines = songs_holder
+    win.song_parts = {"tab": _tab, "tabs": tab_lbls, "chips": chip_lbls, "cov_box": cov_box,
+                      "family": fam_var, "paint_chips": _paint_chips, "voice": voice_var,
+                      "sound_row": snd_row,
+                      "apply_voice": _apply_voice, "save_sound_as": _save_sound_as,
+                      "adv": adv, "adv_toggle": _adv, "pbar": pbar, "now": now_lbl,
+                      "page": _page, "older": b_older, "newer": b_newer,
+                      "library": _load_library, "make_btn": make_btn, "st": st}
 
     if btn_colors:
         try:
@@ -9886,6 +11092,39 @@ def launch():
          #   dim = legible but visibly INACTIVE for disabled buttons, 4.33:1
          "rust_deep": "#9c4020", "rust_hi": "#b05329", "dim": "#8a8076"}
     q = queue.Queue()
+
+    # ---- THE CARD MANAGER (cards.py, 2026-10-17): every model load on forge asks it for
+    # room first, and the CARDS panel shows who is on each 3090. Anything held for a
+    # 'Do mine first' when the app last quit goes back in line now.
+    try:
+        import cards as _cards
+        _cards.configure(
+            ssh=SSH_TARGET, host=F_HOST, main_port=F_PORT,
+            ollama=os.environ.get("DIRECTOR_URL") or "http://%s:11434" % F_HOST,
+            held_path=os.path.join(DATA, "cards_held.json"),
+            index_lookup=lambda _pid: next((i for i in read_index() if i.get("id") == _pid),
+                                           None))
+        threading.Thread(target=_cards.load_held, daemon=True).start()
+    except Exception as _exc:
+        _log_err("card manager unavailable: %r" % _exc)
+
+    # ---- THE DISPATCHER (dispatch.py, 2026-10-22): the other half of the queue. It lifts a
+    # waiting job onto whichever card has room (one job per card, two at once), starts the
+    # next one by itself when a render finishes, and never refuses a click. Imported HERE so
+    # launch()'s handlers (do_run, …) can use it, and kept as None if the module is missing —
+    # every caller must degrade to "submit straight through" rather than break the window.
+    # ⚠️ NOT started in a driver run: a driver must not reach the rig (and the test drivers
+    # build their own Dispatcher against fake lanes — see FORGE_LAB_TESTDISPATCH).
+    try:
+        import dispatch as _dsp
+    except Exception as _exc:
+        _dsp = None
+        _log_err("dispatcher unavailable: %r" % _exc)
+    if not _DRIVER and _dsp is not None:
+        try:
+            _dsp.start()
+        except Exception as _exc:
+            _log_err("dispatcher failed to start: %r" % _exc)
 
     def _btn_colors(w):
         """macOS does NOT reliably honour a custom -background on Tk buttons (the Aqua
@@ -9925,9 +11164,13 @@ def launch():
     st = {"mode": "t2i", "refs": [], "video_mode": "r2v", "wan_mode": WAN_VARIANT_DEFAULT,
           "warm_engine": None,
           "est": None, "take": None, "active": {}, "focus": None, "seed_used": None}
+    # the machine room (engine names, CARD MODE, the cards panel) stays as Ryan left it
+    st["machine_room"] = bool(load_settings().get("machine_room"))
 
     root = tk.Tk()
+    start_ui_pump(root)              # workers ask for UI updates through ui_later()
     root.title("Forge Lab")
+    bind_mac_hide(root)                 # Cmd+H hides the app (Tk's own menu misses the key)
 
     def _log_exc(exc, val, tb):
         """A windowed .app has no console, so any exception inside an after()
@@ -9950,8 +11193,8 @@ def launch():
             os._exit(3)
     root.report_callback_exception = _log_exc
     root.configure(bg=C["bg"])
-    root.geometry("1120x760")
-    root.minsize(940, 640)
+    root.geometry("1320x800")
+    root.minsize(1120, 640)      # +180 px over the old 940: the workspace sidebar
 
     def F(size, weight="normal", mono=False, serif=False):
         fam = (("Menlo",) if mono else
@@ -9991,11 +11234,122 @@ def launch():
 
     body = tk.Frame(root, bg=C["bg"])
     body.pack(fill="both", expand=True, padx=20, pady=14)
+    _tabs_on = bool(load_settings().get("tabs", True))     # workspaces as tabs (dock.py)
+    _dockref = {"d": None}
+
+    # ---- workspace sidebar (UI option A, 2026-10-17). Every workspace in ONE visible list,
+    # instead of six of them hiding inside the TYPE dropdown and silently opening a window.
+    # Rows are Labels, not Buttons: macOS paints Aqua button caps light and ignores
+    # -background (see _btn_colors), and these need a dark fill with a lit current row.
+    # Every row goes through on_kind() — the SAME dispatcher the TYPE dropdown used — so window
+    # reuse and error handling are unchanged. kind_var / on_kind are assigned further down
+    # launch(); the closures resolve them at click time, and _nav_paint tolerates the gap.
+    # Home first: it is the page that answers "what is the rig doing" before you make anything.
+    NAV_ITEMS = (("Home", "Home"), ("MAKE", None), ("Quick", "Quick"), ("Apps", "Apps"), ("Image", "Image"),
+                 ("Video", "Video"),
+                 ("Dialogue", "Dialogue"), ("Song", "Song"),
+                 ("BUILD", None), ("Characters", "Character"), ("Places", "Places"),
+                 ("Voices", "Voices"), ("Episode", "Episode"))
+    # ⚠️ STUDIO + LONG VIDEO are merged into EPISODE (2026-10-17): one window that makes a 16:9
+    # cartoon episode. on_kind() still opens both old windows, and Episode links to them.
+    # ⚠️ WEIRDO is folded into Characters (its roll is the "Surprise me" button there), so it
+    # has no row of its own. on_kind() still knows "Weirdo"; ui_matrix §1b records the merge.
+    NAV_WINDOWED = ("Dialogue", "Song", "Character", "Long video", "Studio", "Episode",
+                    "Voices", "Quick", "Apps", "Places")
+    nav = tk.Frame(body, bg=C["panel"], width=168)
+    nav.pack(side="left", fill="y", padx=(0, 14))
+    nav.pack_propagate(False)
+    nav_rows = {}           # kind -> (row, bar, label); read by the TESTSIDEBAR driver too
+
+    def _nav_go(kind):
+        kind_var.set(kind)
+        on_kind()
+        d_ = _dockref["d"]
+        if d_ is not None and kind in NAV_WINDOWED and d_.cur is not None:
+            if not getattr(d_.cur, "_kind", None):
+                d_.cur._kind = kind
+            _nav_paint()
+
+    def _tab_kind(w):
+        """Which sidebar row a tab belongs to (a tab opened from a link has no row yet)."""
+        k = getattr(w, "_kind", None)
+        if k:
+            return k
+        t = (w.title() or "").lower()
+        for text, kind in NAV_ITEMS:
+            if kind and text.lower() in t:
+                w._kind = kind
+                return kind
+        return None
+
+    def _nav_paint(*_a):
+        try:
+            cur = kind_var.get()
+        except NameError:           # built before kind_var exists — painted again once it does
+            cur = None
+        d_ = _dockref["d"]
+        if d_ is not None and d_.cur is not None:
+            cur = _tab_kind(d_.cur)
+        for k, (row, bar, txt) in nav_rows.items():
+            on = (k == cur) and (d_ is not None or k not in NAV_WINDOWED)
+            bg = "#2a221b" if on else C["panel"]
+            row.configure(bg=bg)
+            txt.configure(bg=bg, fg=C["ink"], font=fh if on else f)
+            bar.configure(bg=C["ochre"] if on else bg)
+
+    # THE FRONT DOOR (review panel, new user: "the first screen says 'for engineers'") — one
+    # big button at the top of the sidebar; Quick also opens by itself at launch
+    _front = tk.Button(nav, text="\u2605 Make a video\nfrom one idea", command=lambda: _nav_go("Quick"),
+                       bg=C["ochre"], fg="#14110f", activebackground="#d9b45e",
+                       activeforeground="#14110f", relief="flat", borderwidth=0,
+                       highlightthickness=0, font=fh, padx=8, pady=10, justify="left",
+                       anchor="w", cursor="hand2")
+    _front.pack(fill="x", padx=10, pady=(12, 4))
+    for _text, _kind in NAV_ITEMS:
+        if _kind is None:
+            tk.Label(nav, text=_text, bg=C["panel"], fg=C["muted"], font=fmonos,
+                     anchor="w").pack(fill="x", padx=14, pady=(16, 4))
+            continue
+        _row = tk.Frame(nav, bg=C["panel"], cursor="hand2")
+        _row.pack(fill="x", padx=6, pady=1)
+        _bar = tk.Frame(_row, bg=C["panel"], width=3)
+        _bar.pack(side="left", fill="y")
+        # "↗" = opens its own window; Image/Video switch the form in place
+        _txt = tk.Label(_row, text=_text + ("  \u2197" if _kind in NAV_WINDOWED and
+                                            not _tabs_on else ""),
+                        bg=C["panel"], fg=C["ink"], font=f, anchor="w", padx=10, pady=7,
+                        cursor="hand2")
+        _txt.pack(side="left", fill="x", expand=True)
+        nav_rows[_kind] = (_row, _bar, _txt)
+        for _w in (_row, _txt):
+            _w.bind("<Button-1>", lambda _e, k=_kind: _nav_go(k))
+            _w.bind("<Enter>", lambda _e, k=_kind: (
+                nav_rows[k][0].cget("bg") == C["panel"]
+                and [w.configure(bg="#241e19") for w in nav_rows[k]]))
+            _w.bind("<Leave>", _nav_paint)
     # The left column SCROLLS. As a plain fixed frame, anything past the bottom
     # edge of the window was unreachable — and the reference picker was pushed
     # there by a placeholder label requesting ~1260x1530 px (a text-mode Label
     # with width=180, height=90 means 180 CHARACTERS x 90 LINES, not pixels).
-    left_outer = tk.Frame(body, bg=C["panel"], width=420)
+    # ---- TABS (Ryan, 2026-10-17: "the different makes dont open new windows but are more
+    # like tabs inside the one window"). The Image/Video form is the first tab ("Make"); every
+    # workspace opens as a tab beside it (dock.py). Settings "tabs": false = the old windows.
+    main_col = tk.Frame(body, bg=C["bg"])
+    main_col.pack(side="left", fill="both", expand=True)
+    tab_strip = tk.Frame(main_col, bg=C["bg"])
+    tab_area = tk.Frame(main_col, bg=C["bg"])
+    if _tabs_on:
+        tab_strip.pack(fill="x", pady=(0, 8))
+    tab_area.pack(fill="both", expand=True)
+    home = tk.Frame(tab_area, bg=C["bg"])
+    if not _tabs_on:
+        home.pack(fill="both", expand=True)
+    else:
+        import dock as _dock_mod
+        _dockref["d"] = _dock_mod.Dock(root, tab_strip, tab_area, home, C, fsm,
+                                       on_change=lambda _w: _nav_paint())
+        _dock_mod.install(_dockref["d"])
+    left_outer = tk.Frame(home, bg=C["panel"], width=420)
     left_outer.pack(side="left", fill="y")
     left_outer.pack_propagate(False)
     lcanvas = tk.Canvas(left_outer, bg=C["panel"], highlightthickness=0, width=402)
@@ -10121,7 +11475,7 @@ def launch():
         if not _acc_sched["on"]:
             _acc_sched["on"] = True
             root.after_idle(_flush_scroll)
-    right = tk.Frame(body, bg=C["bg"])
+    right = tk.Frame(home, bg=C["bg"])
     right.pack(side="left", fill="both", expand=True, padx=(16, 0))
 
     # ---- mode selector
@@ -10141,13 +11495,19 @@ def launch():
     lab(mode_row, "TYPE").pack(side="left")
     kind_var = tk.StringVar(value="Image")
     kind_menu = tk.OptionMenu(mode_row, kind_var, "Image", "Video", "Long video", "Character",
-                              "Weirdo", "Studio", "Song", "Dialogue", command=lambda *_: on_kind())
+                              "Weirdo", "Studio", "Song", "Dialogue", "Episode",
+                              command=lambda *_: on_kind())
     kind_menu.configure(bg=C["panel2"], fg=C["ink"], relief="flat", font=fsm,
                         highlightthickness=0, activebackground=C["rust"],
                         activeforeground="#fff", borderwidth=0, width=7,
                         highlightbackground=C["panel"])
     kind_menu["menu"].configure(bg=C["panel2"], fg="#000000", font=fsm)   # macOS draws the popup panel WHITE and ignores -background: light text is invisible there
     kind_menu.pack(side="left", padx=(6, 0))
+    # The sidebar replaced this row (UI option A). kind_var + kind_menu stay: kind_var is
+    # the state every driver and on_kind() read, and the row stays built so TESTLAYOUT runs.
+    mode_row.pack_forget()
+    kind_var.trace_add("write", _nav_paint)
+    _nav_paint()
 
     model_row = tk.Frame(left, bg=C["panel"])
     model_row.pack(fill="x", padx=16, pady=(6, 0))
@@ -10162,6 +11522,101 @@ def launch():
                          highlightbackground=C["panel"])
     model_menu["menu"].configure(bg=C["panel2"], fg="#000000", font=fsm)   # macOS draws the popup panel WHITE and ignores -background: light text is invisible there
     model_menu.pack(side="left", padx=6)
+
+    # ---- MODEL cards (UI option A, slice 2). Frames + Labels, not Buttons (macOS ignores a
+    # Button's -background; see _btn_colors). Built per KIND by _cards_fill(), which
+    # _fill_model_menu() calls; a click is pick_model(label), exactly what the dropdown did.
+    model_row.pack_forget()
+    cards = tk.Frame(left, bg=C["panel"])
+    cards.pack(fill="x", padx=16, pady=(2, 0))
+    cards_grid = tk.Frame(cards, bg=C["panel"])
+    cards_grid.pack(fill="x")
+    cards_grid.columnconfigure(0, weight=1, uniform="mc")
+    cards_grid.columnconfigure(1, weight=1, uniform="mc")
+    cards_more_btn = tk.Label(cards, text="", bg=C["panel"], fg=C["ochre"], font=fsm,
+                              anchor="w", cursor="hand2")
+    cards_more_btn.pack(fill="x", pady=(6, 0))
+    cards_more = tk.Frame(cards, bg=C["panel"])
+    model_cards = {}        # label -> (outer frame, [widgets to colour], primary)
+    st["_cards_more_open"] = False
+
+    def _cards_paint(*_a):
+        cur = model_var.get()
+        for lab_, (fr, ws, prim) in model_cards.items():
+            on = lab_ == cur
+            bg = "#2a221b" if on else (C["panel2"] if prim else C["panel"])
+            fr.configure(bg=bg, highlightbackground=C["ochre"] if on else C["line"],
+                         highlightcolor=C["ochre"] if on else C["line"],
+                         highlightthickness=2 if on else (1 if prim else 0))
+            for w in ws:
+                w.configure(bg=bg)
+        # a pick that lives under "More models" keeps that list open, or it is invisible
+        if (cur in model_cards and not model_cards[cur][2]
+                and not st.get("_cards_more_open")):
+            _cards_toggle(True)
+
+    def _cards_toggle(want=None):
+        n_more = sum(1 for v in model_cards.values() if not v[2])
+        if not n_more:
+            cards_more_btn.pack_forget()
+            cards_more.pack_forget()
+            return
+        if not cards_more_btn.winfo_manager():
+            cards_more_btn.pack(fill="x", pady=(6, 0), after=cards_grid)
+        st["_cards_more_open"] = (not st.get("_cards_more_open")) if want is None else want
+        if st["_cards_more_open"]:
+            cards_more.pack(fill="x", pady=(4, 0), after=cards_more_btn)
+        else:
+            cards_more.pack_forget()
+        cards_more_btn.configure(text="%s models (%d) %s" % (
+            "Fewer" if st["_cards_more_open"] else "More", n_more,
+            "\u25b4" if st["_cards_more_open"] else "\u25be"))
+
+    cards_more_btn.bind("<Button-1>", lambda _e: _cards_toggle())
+
+    def _cards_fill(kind):
+        for w in list(cards_grid.winfo_children()) + list(cards_more.winfo_children()):
+            w.destroy()
+        model_cards.clear()
+        i = 0
+        for (_md, _var, labl) in _choices(kind):
+            title, sub, prim = MODEL_CARDS.get(labl, (labl, "", False))
+            if not st.get("machine_room"):           # plain words unless it's open
+                sub = MODEL_CARDS_PLAIN.get(labl, sub)
+            if prim:
+                fr = tk.Frame(cards_grid, bg=C["panel2"], highlightthickness=1,
+                              highlightbackground=C["line"], cursor="hand2")
+                fr.grid(row=i // 2, column=i % 2, sticky="nsew",
+                        padx=(0, 6) if i % 2 == 0 else (0, 0), pady=(0, 6))
+                i += 1
+                t = tk.Label(fr, text=title, bg=C["panel2"], fg=C["ink"], font=fh,
+                             anchor="w", cursor="hand2")
+                t.pack(fill="x", padx=10, pady=(8, 0))
+                s = tk.Label(fr, text=sub, bg=C["panel2"], fg=C["muted"], font=fsm,
+                             anchor="w", cursor="hand2")
+                s.pack(fill="x", padx=10, pady=(0, 8))
+                ws = [t, s]
+            else:
+                fr = tk.Frame(cards_more, bg=C["panel"], highlightthickness=0,
+                              highlightbackground=C["line"], cursor="hand2")
+                fr.pack(fill="x", pady=1)
+                t = tk.Label(fr, text=title, bg=C["panel"], fg=C["ink"], font=fsm,
+                             anchor="w", cursor="hand2")
+                t.pack(side="left", padx=(10, 6), pady=5)
+                s = tk.Label(fr, text=sub, bg=C["panel"], fg=C["muted"], font=fsm,
+                             anchor="w", cursor="hand2")
+                s.pack(side="left", pady=5)
+                ws = [t, s]
+            model_cards[labl] = (fr, ws, prim)
+            for w in [fr] + ws:
+                w.bind("<Button-1>", lambda _e, l_=labl: pick_model(l_))
+        st["_cards_more_open"] = False
+        _cards_toggle(False)
+        _cards_paint()
+
+    model_var.trace_add("write", _cards_paint)
+    # NOT filled here: _choices / pick_model are assigned further down launch(). The first
+    # _fill_model_menu() (settings restore -> set_mode -> _sync_dropdowns) fills the cards.
 
     # ---- video-only parameters, immediately under the mode pickers
     vid_row = tk.Frame(left, bg=C["panel"])
@@ -10271,7 +11726,7 @@ def launch():
     vid_row_cards = tk.Frame(left, bg=C["panel"])
     lab(vid_row_cards, "CARD MODE").pack(side="left")
     cards_var = tk.StringVar(value="Solo")
-    cards_menu = tk.OptionMenu(vid_row_cards, cards_var, "Solo", "Turbo", "Studio",
+    cards_menu = tk.OptionMenu(vid_row_cards, cards_var, "Solo", "Both", "Turbo", "Studio",
                                command=lambda *_: apply_cards())
     cards_menu.configure(bg=C["panel2"], fg=C["ink"], relief="flat", font=fsm,
                          highlightthickness=0, activebackground=C["rust"],
@@ -10301,7 +11756,7 @@ def launch():
                          highlightbackground=C["line"], command=lambda: _toggle_free_card())
     free_btn.pack(side="left")
     free_note = lab(free_row, "", fg=C["muted"])
-    free_note.configure(wraplength=430, justify="left")
+    free_note.configure(wraplength=250, justify="left")
     free_note.pack(side="left", padx=(8, 0))
 
     def _paint_free_card():
@@ -10334,8 +11789,11 @@ def launch():
                            "FREE CARD 2 is OFF, so a resident model will REFUSE the run."))
             return "Turbo applies to H3 only — this engine runs on 1 card."
         if mode == "Studio":
-            return ("render on card 0; card 2 is kept warm for the writer — "
+            return ("render on card 1; card 2 is kept warm for the writer — "
                     "POLISH PROMPT uses it.")
+        if mode == "Both":
+            return ("two takes at once — each goes to whichever card is free. Card 2 gets "
+                    "its own ComfyUI (started for you); voices still get room first.")
         return "one 3090 — the default path"
 
     def _set_writer_status(text, colour=None):
@@ -10366,13 +11824,26 @@ def launch():
                 col = C["moss"] if ok else C["ochre"]
             except Exception:
                 msg, col = "card 2: unreachable", C["ochre"]
-            root.after(0, lambda: _set_writer_status(msg, col))
+            ui_later(root, lambda: _set_writer_status(msg, col))
         tt = threading.Thread(target=work, daemon=True)
         _writer["thread"] = tt
         tt.start()
 
     def apply_cards(*_):
         cards_note.configure(text=_cards_hint(), fg=C["ink"])
+        # BOTH: route takes across the cards; start card 2's ComfyUI (off the Tk thread).
+        # Leaving BOTH stops it again — only when nothing is running or waiting there.
+        try:
+            import cards as _c
+            _want = "both" if cards_var.get() == "Both" else "one"
+            if _c.enabled() and _c.route() != _want:
+                _c.set_route(_want)
+                threading.Thread(target=(_c.ensure_second if _want == "both"
+                                         else _c.stop_second), daemon=True).start()
+            elif _c.enabled() and _want == "both":
+                threading.Thread(target=_c.ensure_second, daemon=True).start()
+        except Exception as _exc:
+            _log_err("card route: %r" % _exc)
         if cards_var.get() == "Studio":
             _start_writer_status()
         else:
@@ -10494,6 +11965,7 @@ def launch():
         m.delete(0, "end")
         for (_md, _var, lab) in _choices(kind):
             m.add_command(label=lab, command=lambda lab=lab: pick_model(lab))
+        _cards_fill(kind)
 
     def pick_model(label):
         """Set state from a MODEL label. The label carries the ENGINE for video, so this is
@@ -10532,7 +12004,17 @@ def launch():
                "submit": submit, "run_state": run_state, "collect": collect,
                "s2v_size": VIDEO_SIZES.get(S2V_SIZE_DEFAULT, (640, 640)),
                "subject_block": "", "btn_colors": _btn_colors}
-        return open_long_video(root, ctx)
+        held = st.setdefault("_long_win", {})
+        w = held.get("win")
+        try:
+            if w is not None and w.winfo_exists():   # one at a time (a second tab = two
+                w.deiconify()                         # copies editing the same scenes)
+                w.lift()
+                return w
+        except Exception:
+            pass
+        held["win"] = open_long_video(root, ctx)
+        return held["win"]
 
     def open_character_workspace():
         """CHARACTER is a WORKSPACE too: it needs a saved list, a still, a prompt block and a
@@ -10556,8 +12038,17 @@ def launch():
                # it must arrive through ctx. Without it this window's buttons were never repainted
                # light-with-dark-text and read as unreadable. Ryan: "the buttons are hard to read
                # for me and should be updated to have black text." (Documented on-demand trap.)
-               "btn_colors": _btn_colors}
-        w = open_characters(root, ctx)
+               "btn_colors": _btn_colors,
+               "open_voices": lambda char=None: open_voices_workspace(char)}
+        # The REDESIGNED window (characters_ui, 2026-10-17). The legacy open_characters stays
+        # reachable for its own TESTCHAR driver until Ryan has lived with the new one.
+        if (os.environ.get("FORGE_LAB_TESTCHAR") == "1"
+                or os.environ.get("FORGE_LAB_TESTCHARSEED") == "1"):     # legacy-window drivers
+            w = open_characters(root, ctx)
+        else:
+            import characters_ui
+            ctx["mod"] = sys.modules[__name__]     # NOT `import forge_lab` — see characters_ui
+            w = characters_ui.open_characters2(root, ctx)
         held["win"] = w
         return w
 
@@ -10603,7 +12094,9 @@ def launch():
                 "submit": submit, "run_state": run_state, "collect": collect,
                 # ⚠️ _btn_colors is a LOCAL of launch(); an on-demand window must receive it
                 # through ctx or its buttons never get repainted light-with-dark-text.
-                "btn_colors": _btn_colors}
+                "btn_colors": _btn_colors,
+                "music_video": lambda p, t, ly: open_quick_workspace().qk["from_song"](
+                    p, t, ly)}
         w = open_song(root, ctx3)
         held["win"] = w
         return w
@@ -10623,6 +12116,39 @@ def launch():
                 return w
         except Exception:
             pass
+        # THE PAGE (dialogue2_ui, 2026-10-17): the screenplay as cards + audition casting.
+        # The old window stays one click away ("old window") and for its own drivers.
+        if any(os.environ.get(k) == "1" for k in ("FORGE_LAB_TESTDIALOGUE",
+                                                  "FORGE_LAB_TESTDIALOGUE2",
+                                                  "FORGE_LAB_TESTDIALOGUECAST")):
+            w = open_old_dialogue_workspace()
+            held["win"] = w
+            return w
+        import dialogue2_ui
+        ctx6 = {"C": C, "fonts": {"f": f, "fh": fh, "fsm": fsm}, "mono": {"m": fmono},
+                "btn_colors": _btn_colors, "data": DATA,
+                "mod": sys.modules[__name__],      # NOT `import forge_lab` — see characters_ui
+                # sung lines go through the SAME Song path (submit -> Takes -> collect)
+                "submit": submit, "wait_and_collect": wait_and_collect, "runs": RUNS,
+                "open_old": open_old_dialogue_workspace,
+                "send_to_episode": _dialogue_to_episode,
+                "open_voices": lambda: open_voices_workspace()}
+        w = dialogue2_ui.open_dialogue2(root, ctx6)
+        held["win"] = w
+        return w
+
+    def open_old_dialogue_workspace():
+        """The PREVIOUS Dialogue window (dialogue_ui), kept reachable while Ryan lives with
+        the new one. ONE window only."""
+        held = st.setdefault("_dialogue_old_win", {})
+        w = held.get("win")
+        try:
+            if w is not None and w.winfo_exists():
+                w.deiconify()
+                w.lift()
+                return w
+        except Exception:
+            pass
         ctx4 = {"C": C, "fonts": {"f": f, "fh": fh, "fsm": fsm}, "mono": {"m": fmono},
                 "btn_colors": _btn_colors, "data": DATA, "_driver": _DRIVER,
                 # sung lines go through the SAME Song path (submit -> Takes -> collect)
@@ -10630,6 +12156,18 @@ def launch():
         from dialogue_ui import open_dialogue
         w = open_dialogue(root, ctx4)
         held["win"] = w
+        return w
+
+    def _dialogue_to_episode(dlg_slug):
+        """SEND TO EPISODE: open Episode and make one lip-sync shot per line of this scene,
+        each with the take you kept (episode_ui's 'Make shots from it')."""
+        w = open_episode_workspace()
+        ep = getattr(w, "ep", None)
+        if ep is None:
+            return w
+        ep["st"].setdefault("dlg_map", {})[dlg_slug] = dlg_slug
+        ep["dlg_var"].set(dlg_slug)
+        ep["from_dialogue"]()
         return w
 
     def open_studio_workspace():
@@ -10657,8 +12195,218 @@ def launch():
         held["win"] = w
         return w
 
+    def open_episode_workspace():
+        """EPISODE is the merged Studio + Long video (2026-10-17): idea -> script -> shots ->
+        cut for a 16:9 cartoon episode, in one window (episode_ui). ONE window only: picking
+        the row again RAISES the open one."""
+        held = st.setdefault("_episode_win", {})
+        w = held.get("win")
+        try:
+            if w is not None and w.winfo_exists():
+                w.deiconify()
+                w.lift()
+                return w
+        except Exception:
+            pass
+        import episode_ui
+        ctx5 = {"C": C, "fonts": {"f": f, "fh": fh, "fsm": fsm}, "mono": {"m": fmono},
+                "btn_colors": _btn_colors,
+                "mod": sys.modules[__name__],     # NOT `import forge_lab` — see characters_ui
+                # the old windows stay one click away, for projects made in them
+                "open_studio": open_studio_workspace, "open_long": open_long_video_workspace}
+        w = episode_ui.open_episode(root, ctx5)
+        held["win"] = w
+        return w
+
+    def open_apps_workspace():
+        """APPS (2026-10-17): one-click tools — talking photo, make it move, outfit swap, new
+        angle, change the place / expression, product in hand. ONE window."""
+        held = st.setdefault("_apps_win", {})
+        w = held.get("win")
+        try:
+            if w is not None and w.winfo_exists():
+                w.deiconify()
+                w.lift()
+                return w
+        except Exception:
+            pass
+        import apps_ui
+        ctx9 = {"C": C, "fonts": {"f": f, "fh": fh, "fsm": fsm}, "mono": {"m": fmono},
+                "btn_colors": _btn_colors, "mod": sys.modules[__name__],
+                "open_voices": lambda s=None: open_voices_workspace(s)}
+        w = apps_ui.open_apps(root, ctx9)
+        held["win"] = w
+        return w
+
+    def _open_app(key, **slots):
+        w_ = open_apps_workspace()
+        w_.ap["pick"](key)
+        for k_, v_ in slots.items():
+            w_.ap["set"](k_, v_)
+        return w_
+
+    def open_places_workspace():
+        """PLACES (2026-10-17, Ryan: "generate background images which can then be leveraged
+        in the videos"): make a location once; the set is built IN it. ONE window."""
+        held = st.setdefault("_places_win", {})
+        w = held.get("win")
+        try:
+            if w is not None and w.winfo_exists():
+                w.deiconify()
+                w.lift()
+                w.pl["paint"]()
+                return w
+        except Exception:
+            pass
+        import places_ui
+        ctx9 = {"C": C, "fonts": {"f": f, "fh": fh, "fsm": fsm}, "mono": {"m": fmono},
+                "btn_colors": _btn_colors, "mod": sys.modules[__name__],
+                "open_quick": lambda place=None: open_quick_workspace(place=place)}
+        w = places_ui.open_places(root, ctx9)
+        held["win"] = w
+        return w
+
+    def open_quick_workspace(place=None):
+        """QUICK (2026-10-17): one idea -> a finished video, running the Studio engines in
+        order; every product opens in its Studio window. ONE window: picking it raises it.
+        `place` = a kept Places slug to set it in."""
+        held = st.setdefault("_quick_win", {})
+        w = held.get("win")
+        try:
+            if w is not None and w.winfo_exists():
+                w.deiconify()
+                w.lift()
+                if place:
+                    w.qk["use_place"](place)
+                return w
+        except Exception:
+            pass
+        import quick_ui
+
+        def _in(opener, api, slug):
+            ww = opener()
+            try:
+                getattr(ww, api)["open"](slug)
+            except Exception as exc:
+                _log_err("quick -> studio open failed: %r" % exc)
+            return ww
+        ctx8 = {"C": C, "fonts": {"f": f, "fh": fh, "fsm": fsm}, "mono": {"m": fmono},
+                "btn_colors": _btn_colors, "mod": sys.modules[__name__],
+                "open_character": lambda s: _in(open_character_workspace, "ch2", s),
+                "open_voices": lambda s=None: open_voices_workspace(s),
+                "open_dialogue": lambda s: _in(open_dialogue_workspace, "d2", s),
+                "open_episode": lambda s: _in(open_episode_workspace, "ep", s),
+                "open_app": lambda k, **kw: _open_app(k, **kw),
+                "open_places": lambda: open_places_workspace()}
+        w = quick_ui.open_quick(root, ctx8)
+        held["win"] = w
+        if place:
+            w.qk["use_place"](place)
+        return w
+
+    def open_voices_workspace(char=None):
+        """VOICES (2026-10-17): build a voice once — accent, age, sliders, audition, clone,
+        test in qwen AND fish, give it to a character. ONE window: picking it raises it.
+        `char` opens it on that character's voice (or a draft from their description)."""
+        held = st.setdefault("_voices_win", {})
+        w = held.get("win")
+        try:
+            if w is not None and w.winfo_exists():
+                w.deiconify()
+                w.lift()
+                if char:
+                    w.vo["for_character"](char)
+                return w
+        except Exception:
+            pass
+        import voices_ui
+        ctx7 = {"C": C, "fonts": {"f": f, "fh": fh, "fsm": fsm}, "mono": {"m": fmono},
+                "btn_colors": _btn_colors, "mod": sys.modules[__name__]}
+        w = voices_ui.open_voices(root, ctx7)
+        held["win"] = w
+        if char:
+            w.vo["for_character"](char)
+        return w
+
+    def open_home_tab():
+        """Show the HOME page — queue + machine room + recent takes. One tab, made on demand.
+
+        Not in NAV_WINDOWED: it is a tab in this window, not a workspace with its own window.
+        """
+        d_ = _dockref["d"]
+        if d_ is None:
+            return None
+        for t in (getattr(d_, "tabs", None) or []):
+            if t.title() == "Home":
+                d_.select(t)
+                return t
+        import home_page as _hp
+        # ⚠️ The takes area MIRRORS the image tab, so it needs the image tab's own helpers —
+        # passed through ctx, never `import forge_lab` (the app runs as __main__: importing it
+        # again would execute the module a second time, the trap characters_ui documents).
+        # `takes` is the image tab's own filter machinery: the SAME index, the SAME rules
+        # (take_kind/filter_kind/filter_takes), the SAME 100 cap, and the SAME state — the kind
+        # buttons write st["take_kind"], the unkept toggle st["take_unkept"], and the rating
+        # menu is the very same StringVar, so the two tabs can never drift apart.
+        w = _hp.build(d_, {"C": C, "fonts": {"fsm": fsm, "fh": fh}, "mono": {"s": fmono},
+                           "thumb": thumb_photo, "poster": video_poster,
+                           "open_full": open_full,
+                           "takes": {"index": read_index, "kind": take_kind,
+                                     "rating": take_rating, "filter_kind": filter_kind,
+                                     "filter_takes": filter_takes, "kinds": KIND_FILTERS,
+                                     "ratings": RATING_FILTERS, "shown": TAKES_SHOWN,
+                                     "runs": RUNS, "state": st,
+                                     "rating_var": takes_filter_var,
+                                     # the image tab repaints its own chips and list the
+                                     # moment a filter is changed here — otherwise the two
+                                     # would disagree until its next reload
+                                     "on_filter": lambda: (_paint_kind(), load_takes())}})
+        w._kind = "Home"
+        return w
+
     def on_kind(*_):
         kind = kind_var.get()
+        if kind == "Home":
+            try:
+                open_home_tab()
+            except Exception as exc:
+                _log_err("home tab failed: %r" % exc)
+            return
+        if kind == "Apps":
+            try:
+                open_apps_workspace()
+            except Exception as exc:
+                _log_err("apps workspace failed: %r" % exc)
+            kind_var.set(kind_label(st["mode"]))      # the form stays where it was
+            return
+        if kind == "Quick":
+            try:
+                open_quick_workspace()
+            except Exception as exc:
+                _log_err("quick workspace failed: %r" % exc)
+            kind_var.set(kind_label(st["mode"]))      # the form stays where it was
+            return
+        if kind == "Places":
+            try:
+                open_places_workspace()
+            except Exception as exc:
+                _log_err("places workspace failed: %r" % exc)
+            kind_var.set(kind_label(st["mode"]))      # the form stays where it was
+            return
+        if kind == "Voices":
+            try:
+                open_voices_workspace()
+            except Exception as exc:
+                _log_err("voices workspace failed: %r" % exc)
+            kind_var.set(kind_label(st["mode"]))      # the form stays where it was
+            return
+        if kind == "Episode":
+            try:
+                open_episode_workspace()
+            except Exception as exc:
+                _log_err("episode workspace failed: %r" % exc)
+            kind_var.set(kind_label(st["mode"]))      # the form stays where it was
+            return
         if kind == "Studio":
             try:
                 open_studio_workspace()
@@ -10701,6 +12449,8 @@ def launch():
                 _log_err("long video workspace failed: %r" % exc)
             kind_var.set(kind_label(st["mode"]))      # the form stays where it was
             return
+        if _dockref["d"] is not None:
+            _dockref["d"].select(None)      # Image / Video: the Make tab
         _fill_model_menu(kind)
         # restore whatever was last chosen for THIS kind, so Image -> Video -> Image does
         # not silently reset the model
@@ -10748,8 +12498,173 @@ def launch():
     clear_btn.pack(side="left", padx=(0, 6))
     pol_msg = tk.Label(pol_row, text="", bg=C["panel"], fg=C["muted"], font=fsm)
     pol_msg.pack(side="left", padx=6)
+    # ♥ SAVED PROMPTS: keep the prompt in the box; bring any saved one back
+    fav_row = tk.Frame(left, bg=C["panel"])
+    fav_row.pack(fill="x", padx=16, pady=(6, 0))
+    fav_save_btn = tk.Button(fav_row, text="\u2665 SAVE PROMPT", bg=C["panel2"], fg=C["ink"],
+                             activebackground=C["rust_deep"], activeforeground="#fff",
+                             relief="flat", font=fsm, padx=8, pady=5, borderwidth=0,
+                             highlightthickness=1, highlightbackground=C["line"],
+                             command=lambda: _fav_save_box())
+    fav_save_btn.pack(side="left")
+    fav_open_btn = tk.Button(fav_row, text="SAVED PROMPTS", bg=C["panel2"], fg=C["ink"],
+                             activebackground=C["rust_deep"], activeforeground="#fff",
+                             relief="flat", font=fsm, padx=8, pady=5, borderwidth=0,
+                             highlightthickness=1, highlightbackground=C["line"],
+                             command=lambda: open_saved_prompts())
+    fav_open_btn.pack(side="left", padx=6)
+    fav_msg = tk.Label(fav_row, text="", bg=C["panel"], fg=C["muted"], font=fsm)
+    fav_msg.pack(side="left", padx=4)
+
+    def _fav_count():
+        n_ = len(fav_list())
+        fav_open_btn.configure(text="SAVED PROMPTS (%d)" % n_ if n_ else "SAVED PROMPTS")
+
+    try:
+        _fav_count()
+    except Exception:
+        pass
+
+    def _fav_save_box():
+        txt_ = prompt.get("1.0", "end").strip()
+        try:
+            fav_add(txt_, st.get("mode"))
+        except ValueError:
+            fav_msg.configure(text="the box is empty", fg=C["ochre"])
+            return None
+        fav_msg.configure(text="saved", fg=C["muted"])
+        _fav_count()
+        _refavs()
+        return txt_
+
+    def _fav_use(text):
+        """Put a saved prompt in the box. What was there goes to REVERT (same as a character)."""
+        had = prompt.get("1.0", "end").rstrip("\n")
+        if had.strip() and had.strip() != text.strip():
+            _pol["original"] = had
+            revert_btn.configure(state="normal")
+        prompt.delete("1.0", "end")
+        prompt.insert("1.0", text)
+        fav_msg.configure(text="loaded \u2014 REVERT undoes", fg=C["muted"])
+
+    def open_saved_prompts():
+        """The list: search, pick one to read it in full, Use it (or double-click), Remove."""
+        held = st.setdefault("_favs_win", {})
+        w0 = held.get("win")
+        try:
+            if w0 is not None and w0.winfo_exists():
+                w0.deiconify()
+                w0.lift()
+                w0.fv["paint"]()
+                return w0
+        except Exception:
+            pass
+        top = tk.Toplevel(root)
+        top.title("Saved prompts")
+        top.configure(bg=C["panel"])
+        top.geometry("760x560")
+        try:
+            top.transient(root)
+        except Exception:
+            pass
+        held["win"] = top
+        tk.Label(top, text="\u2665 SAVED PROMPTS", bg=C["panel"], fg=C["ink"],
+                 font=fh).pack(anchor="w", padx=16, pady=(14, 2))
+        tk.Label(top, text="newest first \u00b7 double-click one to put it in the prompt box",
+                 bg=C["panel"], fg=C["muted"], font=fsm).pack(anchor="w", padx=16)
+        srow = tk.Frame(top, bg=C["panel"])
+        srow.pack(fill="x", padx=16, pady=(8, 4))
+        tk.Label(srow, text="Search", bg=C["panel"], fg=C["muted"], font=fsm).pack(side="left")
+        q_var = tk.StringVar(value="")
+        q_ent = tk.Entry(srow, textvariable=q_var, bg="#100e0c", fg=C["ink"], font=fsm,
+                         relief="flat", insertbackground=C["ink"])
+        q_ent.pack(side="left", fill="x", expand=True, padx=8, ipady=3)
+        brow = tk.Frame(top, bg=C["panel"])
+        brow.pack(side="bottom", fill="x", padx=16, pady=(6, 14))
+        lf_ = tk.Frame(top, bg=C["panel"])
+        lf_.pack(fill="both", expand=True, padx=16)
+        sb_ = tk.Scrollbar(lf_, orient="vertical")
+        lb = tk.Listbox(lf_, bg="#100e0c", fg=C["ink"], font=fsm, relief="flat",
+                        selectbackground=C["rust_deep"], selectforeground="#fff",
+                        activestyle="none", highlightthickness=0, height=10,
+                        yscrollcommand=sb_.set, exportselection=False)
+        sb_.configure(command=lb.yview)
+        sb_.pack(side="right", fill="y")
+        lb.pack(side="left", fill="both", expand=True)
+        full = tk.Text(top, height=6, wrap="word", bg="#100e0c", fg=C["ink"], font=fsm,
+                       relief="flat", padx=8, pady=6)
+        full.pack(fill="x", padx=16, pady=(8, 0))
+        shown_ = []
+
+        def _paint(_e=None):
+            shown_[:] = fav_search(q_var.get())
+            lb.delete(0, "end")
+            for d in shown_:
+                lb.insert("end", "  %s%s" % (d.get("name") or fav_name(d["prompt"]),
+                                             ("   \u00b7 " + kind_label(d["mode"]))
+                                             if d.get("mode") in MODES else ""))
+            if not shown_:
+                lb.insert("end", "  nothing saved yet \u2014 \u2665 SAVE PROMPT under the "
+                                 "prompt box, or \u2665 on a take" if not q_var.get().strip()
+                          else "  nothing matches")
+            _show()
+            _fav_count()
+
+        def _sel():
+            cur = lb.curselection()
+            if cur and cur[0] < len(shown_):
+                return shown_[cur[0]]
+            return None
+
+        def _show(_e=None):
+            d = _sel()
+            full.configure(state="normal")
+            full.delete("1.0", "end")
+            if d:
+                full.insert("1.0", d["prompt"])
+            full.configure(state="disabled")
+
+        def _use(_e=None):
+            d = _sel()
+            if not d:
+                return None
+            _fav_use(d["prompt"])
+            top.withdraw()
+            return d["prompt"]
+
+        def _remove():
+            d = _sel()
+            if not d:
+                return
+            fav_remove(d["prompt"])
+            _paint()
+            _refavs()
+
+        lb.bind("<<ListboxSelect>>", _show)
+        lb.bind("<Double-Button-1>", _use)
+        lb.bind("<Return>", _use)
+        q_ent.bind("<KeyRelease>", _paint)
+        for _t, _cmd, _p in (("USE IT", _use, True), ("REMOVE", _remove, False),
+                             ("CLOSE", top.withdraw, False)):
+            tk.Button(brow, text=_t, command=_cmd, relief="flat", borderwidth=0,
+                      font=fh if _p else fsm, padx=12, pady=6,
+                      bg=C["ochre"] if _p else C["panel2"],
+                      fg="#14110f" if _p else C["ink"],
+                      highlightthickness=1, highlightbackground=C["line"]).pack(
+                side="left" if _t != "CLOSE" else "right", padx=(0, 8))
+        top.bind("<Escape>", lambda _e: top.withdraw())
+        top.fv = {"paint": _paint, "lb": lb, "full": full, "q": q_var, "use": _use,
+                  "remove": _remove, "shown": shown_}
+        _paint()
+        if shown_:
+            lb.selection_set(0)
+            _show()
+        _btn_colors(top)
+        q_ent.focus_set()
+        return top
     phelp = tk.Label(left, text="", bg=C["panel"], fg=C["muted"], font=fsm,
-                     wraplength=380, justify="left")
+                     wraplength=340, justify="left", anchor="w")   # 380 was wider than the
+    # column, so the label shrank and lost its first letters ("ext to image")
     phelp.pack(anchor="w", padx=16, pady=(5, 0))
 
     # ---- CHARACTER: applied from the CHARACTER workspace (TYPE -> "Character").
@@ -10900,6 +12815,28 @@ def launch():
     e_w.insert(0, "1024"); e_h.insert(0, "1024"); e_steps.insert(0, "25")
     e_res.insert(0, "1024"); e_seed.insert(0, "-1"); e_prefix.insert(0, "forge_lab")
 
+    # ---- Advanced fold (UI option A, slice 3). QUALITY + ASPECT set these numbers; the raw
+    # fields fold away. ⚠️ qgrid must stay PACKED: set_mode() re-packs ASPECT `before=qgrid`,
+    # which raises TclError if qgrid is unpacked. So folding COLLAPSES it to 1 px instead.
+    # The fields keep their values and every reader (params, estimate) still sees them.
+    adv_lbl = tk.Label(setbox, text="", bg=C["panel"], fg=C["ochre"], font=fsm, anchor="w",
+                       cursor="hand2")
+    adv_lbl.pack(anchor="w", pady=(6, 0), after=qgrid)
+
+    def _adv_set(open_):
+        st["_adv_open"] = bool(open_)
+        if open_:
+            qgrid.grid_propagate(True)
+            qgrid.configure(height=0)         # 0 = "no request": grid sizes it from the fields
+        else:
+            qgrid.grid_propagate(False)
+            qgrid.configure(height=1)
+        adv_lbl.configure(text=("Hide advanced \u25b4" if open_ else
+                                "Advanced \u2014 size, steps, seed, prefix \u25be"))
+
+    adv_lbl.bind("<Button-1>", lambda _e: _adv_set(not st.get("_adv_open")))
+    _adv_set(False)
+
     def _size_choices(kind):
         """The SIZE entries a KIND may pick — each engine's own measured set.
 
@@ -11048,8 +12985,13 @@ def launch():
     dim_lbl.pack(anchor="w", pady=(6, 0))
 
     # ---- estimate + run
-    estbox = tk.Frame(left, bg=C["panel"])
-    estbox.pack(fill="x", padx=16, pady=(16, 0))
+    # PINNED (UI option A, slice 3). A child of left_outer, NOT of the scrolling `left`, and
+    # packed `before=lvsb` so it claims the bottom edge ahead of the scrollbar + canvas:
+    # APPROVE & RUN is always on screen instead of below the fold of a long form. (Tk cannot
+    # reparent a widget, so the parent is chosen here, at construction.)
+    estbox = tk.Frame(left_outer, bg=C["panel"], padx=16, pady=12)
+    estbox.pack(side="bottom", fill="x", before=lvsb)
+    tk.Frame(left_outer, bg=C["line"], height=1).pack(side="bottom", fill="x", before=lvsb)
     tk.Label(estbox, text="4 · ESTIMATE", bg=C["panel"], fg=C["muted"], font=fh).pack(anchor="w")
     est_lbl = tk.Label(estbox, text="—", bg=C["panel"], fg=C["ink"], font=fmono,
                        justify="left", wraplength=380)
@@ -11061,7 +13003,10 @@ def launch():
                         disabledforeground=C["dim"],
                         relief="flat", font=fh, padx=14, pady=7,
                         borderwidth=0)
-    run_btn.pack(side="left")
+    # its OWN row: three buttons on one line clipped CANCEL QUEUED on macOS (fonts ~1.4x
+    # the Linux test box). side=top takes a full-width parcel; the side=left pair below fill
+    # what is left under it.
+    run_btn.pack(side="top", fill="x", pady=(0, 6))
     stop_btn = tk.Button(btn_row, text="INTERRUPT", bg=C["ochre"], fg="#14110f",
                          activebackground="#d8b45f", activeforeground="#14110f",
                          disabledforeground=C["dim"], relief="flat", font=fsm,
@@ -11069,8 +13014,11 @@ def launch():
                          # ⚠️ in a THREAD: post_json blocks up to 60 s when forge is unreachable,
                          # and on the Tk thread that froze the whole window.
                          command=lambda: threading.Thread(
-                             target=lambda: post_json("/interrupt", {}), daemon=True).start())
-    stop_btn.pack(side="left", padx=8)
+                             # BOTH mode: interrupt the ComfyUI the focused take is ON
+                             target=lambda: post_json("/interrupt", {},
+                                                      base=_base_for(st.get("focus") or "")),
+                             daemon=True).start())
+    stop_btn.pack(side="left", padx=(0, 8))
     # removes only THIS app's WAITING runs — see cancel_queued(). Command bound late, below.
     cancelq_btn = tk.Button(btn_row, text="CANCEL QUEUED", bg=C["panel2"], fg=C["ink"],
                             relief="flat", font=fsm, padx=10, pady=7, borderwidth=0)
@@ -11093,7 +13041,165 @@ def launch():
     steptxt = tk.Label(runpan, text="", bg=C["panel"], fg=C["muted"], font=fmonos)
     steptxt.pack(anchor="w", padx=16, pady=(5, 0))
     gpu_lbl = tk.Label(runpan, text="", bg=C["panel"], fg=C["muted"], font=fmonos)
-    gpu_lbl.pack(anchor="w", padx=16, pady=(6, 14))
+    gpu_lbl.pack(anchor="w", padx=16, pady=(6, 6))
+    # CARDS: both 3090s — who holds each, working or idle, STUCK flags, Free / Stop. Behind
+    # "Show the machine room" (review panel, new user: "Free next to 18.2 GB reads like a
+    # price; 'Uncensored' is alarming; I don't know what a card is").
+    mr_lbl = tk.Label(runpan, text="Show the machine room \u25b8", bg=C["panel"],
+                      fg=C["ochre"], font=fsm, cursor="hand2", anchor="w")
+    mr_lbl.pack(fill="x", padx=16, pady=(0, 10))
+
+    def _toggle_machine_room(_e=None):
+        st["machine_room"] = not st.get("machine_room")
+        if cards_box is not None:
+            if st["machine_room"]:
+                cards_box.pack(fill="x", padx=16, pady=(0, 14), after=mr_lbl)
+            else:
+                cards_box.pack_forget()
+        if writer_row is not None:
+            if st["machine_room"]:
+                writer_row.pack(fill="x", padx=16, pady=(0, 10), after=mr_lbl)
+            else:
+                writer_row.pack_forget()
+        mr_lbl.configure(text=("Hide the machine room \u25be" if st["machine_room"]
+                               else "Show the machine room \u25b8"))
+        # the technical details follow it: engine names on the cards, CARD MODE, steps
+        try:
+            _fill_model_menu(kind_label(st["mode"]))
+            relayout()
+            refresh_estimate()
+        except Exception as _exc:
+            _log_err("machine room repaint: %r" % _exc)
+        if _e is not None and not _DRIVER and os.environ.get("FORGE_LAB_NOAUTOSAVE") != "1":
+            save_settings({"machine_room": bool(st["machine_room"])})
+    mr_lbl.bind("<Button-1>", _toggle_machine_room)
+    try:
+        import cards_ui as _cards_ui
+        cards_box = _cards_ui.build_panel(
+            runpan, {"C": C, "fonts": {"f": f, "fh": fh, "fsm": fsm}, "mono": {"s": fmonos}})
+        cards_box.pack(fill="x", padx=16, pady=(0, 14))
+        if not st.get("machine_room"):
+            cards_box.pack_forget()
+        gpu_lbl.pack_forget()      # the panel shows both cards; this line only knew card 1
+    except Exception as _exc:
+        cards_box = None
+        _log_err("cards panel unavailable: %r" % _exc)
+    # WRITER: which model writes the scripts and plans the shots — a PROVIDER + a MODEL, like
+    # Hermes (Ryan, Oct 19: "being able to choose models like I do in hermes"). Machine room
+    # only. Saved as settings "writer" and read by every Director() (director.chosen_writer);
+    # keys go to writer_keys.json (0600), never settings.json.
+    writer_row = None
+    try:
+        import director as _dw
+        from tkinter import ttk as _ttk
+        writer_row = tk.Frame(runpan, bg=C["panel"])
+        _wtop = tk.Frame(writer_row, bg=C["panel"])
+        _wtop.pack(fill="x")
+        tk.Label(_wtop, text="WRITER", bg=C["panel"], fg=C["muted"], font=fsm).pack(side="left")
+        _w = _dw.chosen_writer()
+        _plabels = [_dw.PROVIDERS[k]["label"] for k in _dw.PROVIDER_ORDER]
+        _pkey = dict(zip(_plabels, _dw.PROVIDER_ORDER))
+        prov_var = tk.StringVar(value=_dw.PROVIDERS[_w["provider"]]["label"])
+        wmodel_var = tk.StringVar(value=_w["model"])
+        wbase = {"url": _w["base_url"]}
+        wnote = tk.Label(writer_row, text="", bg=C["panel"], fg=C["faint"], font=fsm,
+                         anchor="w", justify="left", wraplength=520)
+
+        def _writer_note():
+            _pk = _pkey.get(prov_var.get(), "ollama")
+            if _pk == "ollama":
+                _t = "runs on your rig - free, private, open weights"
+            elif _dw.writer_key(_pk) or _pk == "custom":
+                _t = "cloud: scripts are sent to %s (pay per use). Not for an open-weights-only piece." \
+                     % _dw.PROVIDERS[_pk]["label"]
+            else:
+                _t = "needs an API key - click key"
+            wnote.configure(text=_t)
+
+        def _save_writer():
+            _pk = _pkey.get(prov_var.get(), "ollama")
+            _wd = {"provider": _pk, "model": wmodel_var.get().strip()}
+            if _pk == "custom" or wbase["url"] != _dw.PROVIDERS[_pk]["base_url"]:
+                _wd["base_url"] = wbase["url"]
+            if not _DRIVER and os.environ.get("FORGE_LAB_NOAUTOSAVE") != "1":
+                save_settings({"writer": _wd})
+            _writer_note()
+
+        def _load_models(_keep=True):
+            _pk = _pkey.get(prov_var.get(), "ollama")
+            _base = wbase["url"] or _dw.PROVIDERS[_pk]["base_url"]
+
+            def _work():
+                _names = _dw.list_models(_pk, _base)
+
+                def _fill():
+                    wmodel_box.configure(values=_names)
+                    if not _keep or not wmodel_var.get().strip():
+                        if _names:
+                            wmodel_var.set(_names[0])
+                            _save_writer()
+                ui_later(wmodel_box, _fill)
+            threading.Thread(target=_work, daemon=True).start()
+
+        def _pick_provider(_lab):
+            _pk = _pkey.get(_lab, "ollama")
+            wbase["url"] = _dw.PROVIDERS[_pk]["base_url"]
+            if _pk == "custom":
+                from tkinter import simpledialog as _sd
+                _u = _sd.askstring("Writer", "OpenAI-compatible base URL\n"
+                                   "(e.g. http://localhost:1234/v1 for LM Studio)",
+                                   parent=writer_row)
+                wbase["url"] = (_u or "").strip()
+            wmodel_var.set("")
+            _save_writer()
+            _load_models(_keep=False)
+
+        prov_menu = tk.OptionMenu(_wtop, prov_var, *_plabels, command=_pick_provider)
+        prov_menu.configure(bg=C["panel2"], fg=C["ink"], activebackground=C["rust"],
+                            activeforeground="#fff", relief="flat", highlightthickness=0,
+                            font=fsm)
+        prov_menu["menu"].configure(bg=C["panel2"], fg="#000000", font=fsm)
+        prov_menu.pack(side="left", padx=(8, 6))
+        wmodel_box = _ttk.Combobox(_wtop, textvariable=wmodel_var, width=30, font=fsm)
+        wmodel_box.pack(side="left", fill="x", expand=True)
+        wmodel_box.bind("<<ComboboxSelected>>", lambda _e: _save_writer())
+        wmodel_box.bind("<Return>", lambda _e: _save_writer())
+        wmodel_box.bind("<FocusOut>", lambda _e: _save_writer())
+
+        def _ask_key(_e=None):
+            _pk = _pkey.get(prov_var.get(), "ollama")
+            if _pk == "ollama":
+                return
+            from tkinter import simpledialog as _sd
+            _k = _sd.askstring("Writer", "API key for %s\n(kept on this Mac only, in %s)"
+                               % (_dw.PROVIDERS[_pk]["label"], _dw.keys_path()),
+                               show="\u2022", parent=writer_row)
+            if _k is not None:
+                _dw.save_writer_key(_pk, _k)
+                _writer_note()
+                _load_models()
+        key_lbl = tk.Label(_wtop, text="key", bg=C["panel"], fg=C["ochre"], font=fsm,
+                           cursor="hand2")
+        key_lbl.pack(side="left", padx=(8, 0))
+        key_lbl.bind("<Button-1>", _ask_key)
+        wnote.pack(fill="x", pady=(2, 0))
+        _writer_note()
+        # how renders reach the rig (comfy_route): shown so it's never a mystery
+        try:
+            import comfy_route as _cr
+            _rt = ("RENDERS  via the Comfy SDK (Comfy API v2) \u2192 %s"
+                   % _cr.proxy_url(F_HOST, F_PORT)) if _cr.enabled() else \
+                  "RENDERS  sent straight to ComfyUI (Comfy SDK route off)"
+        except Exception:
+            _rt = "RENDERS  sent straight to ComfyUI"
+        tk.Label(writer_row, text=_rt, bg=C["panel"], fg=C["muted"], font=fsm,
+                 anchor="w").pack(fill="x", pady=(6, 0))
+        _load_models()
+        if st.get("machine_room"):
+            writer_row.pack(fill="x", padx=16, pady=(0, 10), after=mr_lbl)
+    except Exception as _exc:
+        writer_row = None
+        _log_err("writer picker unavailable: %r" % _exc)
 
     # ---- takes
     tk.Label(right, text="6 · TAKES", bg=C["bg"], fg=C["muted"], font=fh).pack(
@@ -11102,6 +13208,33 @@ def launch():
     takes_hdr.pack(anchor="w")
     takes_hdr.configure(text="every run is kept in ~/forge-lab/runs/  ·  click a "
                              "thumbnail to open it full size")
+    # ---- KIND: All / Images / Videos / Songs (house toggle idiom) ----
+    kind_ctl = tk.Frame(right, bg=C["bg"])
+    kind_ctl.pack(anchor="w", pady=(4, 0))
+    kind_btns = {}
+    # LABELS, not Buttons: macOS paints a Button light whatever bg says, a Label it honours
+    for _kf in KIND_FILTERS:
+        _kb = tk.Label(kind_ctl, text=_kf, bg=C["panel2"], fg=C["ink"], font=fsm,
+                       padx=12, pady=3, cursor="hand2")
+        _kb.bind("<Button-1>", lambda _e, k=_kf: _set_kind(k))
+        _kb.pack(side="left", padx=(0, 4))
+        kind_btns[_kf] = _kb
+    st.setdefault("take_kind", "All")
+
+    def _paint_kind():
+        for _k, _b in kind_btns.items():
+            _on = _k == st.get("take_kind", "All")
+            _b.configure(bg=C["ink"] if _on else C["panel2"],
+                         fg="#14110f" if _on else C["ink"])
+
+    def _set_kind(k):
+        st["take_kind"] = k if k in KIND_FILTERS else "All"
+        _paint_kind()
+        try:
+            tcanvas.yview_moveto(0.0)
+        except Exception:
+            pass
+        load_takes()
     # ---- rating filter + COMPARE controls (house toggle idiom; no Checkbutton anywhere) ----
     takes_ctl = tk.Frame(right, bg=C["bg"])
     takes_ctl.pack(anchor="w", pady=(2, 0))
@@ -11124,6 +13257,21 @@ def launch():
                         activebackground=C["rust"], activeforeground="#fff", relief="flat",
                         font=fsm, padx=8, pady=1, borderwidth=0)
     cmp_btn.pack(side="left", padx=(10, 0))
+    # ---- SELECT SEVERAL TO DELETE (Ryan 2026-10-22: "select multiple takes at once to
+    # delete ... maybe a little checkbox"). A ☐ on each take; this bar acts on the ticked ones.
+    bulk_ctl = tk.Frame(right, bg=C["bg"])
+    bulk_ctl.pack(anchor="w", pady=(4, 0))
+    bulk_all = tk.Label(bulk_ctl, text="\u2610 select all shown", bg=C["bg"], fg=C["ink"],
+                        font=fsm, cursor="hand2")
+    bulk_all.pack(side="left")
+    bulk_del = tk.Button(bulk_ctl, text="DELETE SELECTED (0)", bg=C["panel2"], fg=C["ink"],
+                         activebackground=C["rust_deep"], activeforeground="#fff",
+                         disabledforeground=C["dim"], relief="flat", font=fsm, padx=8, pady=1,
+                         borderwidth=0, state="disabled", command=lambda: _bulk_delete_ask())
+    bulk_del.pack(side="left", padx=(12, 0))
+    bulk_clear = tk.Label(bulk_ctl, text="clear", bg=C["bg"], fg=C["faint"], font=fsm,
+                          cursor="hand2")
+    bulk_clear.pack(side="left", padx=(10, 0))
     take_wrap = tk.Frame(right, bg=C["bg"])
     take_wrap.pack(fill="both", expand=True, pady=(8, 0))
     tcanvas = tk.Canvas(take_wrap, bg=C["bg"], highlightthickness=0, yscrollincrement=1)
@@ -11206,6 +13354,11 @@ def launch():
         outdir = os.path.join(DATA, "frames")
         os.makedirs(outdir, exist_ok=True)
         out = os.path.join(outdir, os.path.splitext(os.path.basename(path))[0] + "-last.png")
+        try:                              # already taken from this clip: no ffmpeg (lag)
+            if os.path.getmtime(out) >= os.path.getmtime(path) and os.path.getsize(out):
+                return out
+        except OSError:
+            pass
         try:
             subprocess.run(["ffmpeg", "-v", "error", "-y", "-sseof", "-0.15", "-i", path,
                             "-vsync", "0", "-frames:v", "1", out],
@@ -11238,18 +13391,29 @@ def launch():
         else:
             vid_row.pack_forget()
             vid_hint.pack_forget()
-        if is_vid and not is_wan:            # H3 only — WAN has neither a LoRA nor audio
+        # LoRA row: H3 (not WAN) AND the Krea 2 / FLUX 3 image engines — their LoRAs live in the
+        # same loras/ folder, so _lora_names() already offers them. AUDIO stays H3-only.
+        _lora_ok = (is_vid and not is_wan) or (m.get("engine") in ("krea2", "flux3"))
+        if _lora_ok:
             vid_row_lora.pack(fill="x", padx=16, pady=(4, 0), before=prompt_head)
-            vid_row_audio.pack(fill="x", padx=16, pady=(4, 0), before=prompt_head)
         else:
             vid_row_lora.pack_forget()
+        if is_vid and not is_wan:            # H3 only — WAN has no audio
+            vid_row_audio.pack(fill="x", padx=16, pady=(4, 0), before=prompt_head)
+        else:
             vid_row_audio.pack_forget()
         # CARD MODE is visible for EVERY mode — Studio matters everywhere (POLISH PROMPT uses
         # the writer), and Turbo must be VISIBLE-but-HONEST on a non-H3 engine: the hint says it
         # applies to H3 only and params() sends gpus=1 there. A control that lies is worse than
         # one that hides; this one shows and tells the truth. TESTCARDS asserts hint == params.
-        vid_row_cards.pack(fill="x", padx=16, pady=(4, 0), before=prompt_head)
-        free_row.pack(fill="x", padx=16, pady=(2, 0), before=prompt_head)
+        # ...but only in the machine room: closed, the rows show only when they're NOT at the
+        # plain defaults (Solo, card 2 freed), so a setting in force never hides
+        if st.get("machine_room") or cards_var.get() != "Solo" or not free_card_var.get():
+            vid_row_cards.pack(fill="x", padx=16, pady=(4, 0), before=prompt_head)
+            free_row.pack(fill="x", padx=16, pady=(2, 0), before=prompt_head)
+        else:
+            vid_row_cards.pack_forget()
+            free_row.pack_forget()
         apply_cards()
         # S2V has no LoRA and no on/off audio — it has a performance FILE and a chained LENGTH
         _is_s2v = is_wan and st.get("wan_mode") == "s2v"
@@ -11319,6 +13483,19 @@ def launch():
                 qvar.set("Standard" if "Standard" in _quality_labels()
                          else _quality_labels()[0])
                 apply_quality()
+        elif MODES[m].get("default_steps"):
+            # Krea 2 / FLUX 3: canvas follows the QUALITY preset, but the STEP COUNT is the
+            # model's own (8 turbo / 50 raw / 16 flux3). A distilled checkpoint at a 25-step
+            # preset is off-spec, so pin the count AFTER the preset sized the canvas.
+            st["imode"] = m
+            _fill_quality_menu("image")
+            if qvar.get() not in _quality_labels():
+                qvar.set(st.get("ipreset", "Medium"))
+            apply_quality(qvar.get())
+            e_steps.configure(state="normal")
+            e_steps.delete(0, "end")
+            e_steps.insert(0, str(int(MODES[m]["default_steps"])))
+            refresh_estimate()
         else:
             st["imode"] = m
             _fill_quality_menu("image")
@@ -11334,16 +13511,18 @@ def launch():
         amenu.configure(state="disabled" if is_ref else "normal")
         is_vid = bool(MODES[m].get("video"))
         is_wan = bool(MODES[m].get("wan"))
+        _lora_ok = (is_vid and not is_wan) or (MODES[m].get("engine") in ("krea2", "flux3"))
         for row in (vid_row, vid_row_lora, vid_row_audio, s2v_row, s2v_len_row,
                     src_row, src_note_row):
+            _on = is_vid or (row is vid_row_lora and _lora_ok)
             for w in row.winfo_children():
                 try:
-                    w.configure(state="normal" if is_vid else "disabled")
+                    w.configure(state="normal" if _on else "disabled")
                 except Exception:
                     pass          # labels have no state
         if is_wan:
             # WAN has NO user-selectable LoRA: the lightning distill is wired in by the
-            # quality path, and character LoRAs are H3 ref2va-only.
+            # quality path, and the character LoRA is H3 ref2va-only.
             lora_var.set("(none)")
             lora_lbl.configure(text="LORA (built-in)")
             e_lstr.delete(0, "end"); e_lstr.insert(0, "1.0")
@@ -11430,8 +13609,8 @@ def launch():
                 return ("ref 1 IS the first frame the clip starts from. Give it the same "
                         "aspect as the SIZE canvas. WAN does not use <Picture N> tags.")
             return ("Not used — WAN t2v takes no image. Pick 'First frame (i2v)' to animate "
-                    "one. NOTE: WAN cannot use a character LoRA (H3 ref2va only), so it "
-                    "is for B-roll and backgrounds, not for the main character.")
+                    "one. NOTE: WAN cannot use the character LoRA (H3 ref2va only), so it "
+                    "is for B-roll and backgrounds, not for the character.")
         if m.get("video"):
             vm = VIDEO_MODES.get(st.get("video_mode", "r2v"), VIDEO_MODES["r2v"])
             if vm["refs"] >= 2:            # flf: positional meaning matters most
@@ -11448,6 +13627,10 @@ def launch():
                 return ("Address it in the prompt BY TAG as <Picture 1>. The tag order "
                         "IS the connection order.")
             return vm["note"]
+        if m.get("engine") == "flux3" and m.get("ref"):
+            return ("ref 1 is the picture being CHANGED — the canvas follows its aspect. Add "
+                    "more for a multi-reference composition (up to %d). Describe the TARGET "
+                    "image as a full caption with the edit folded in." % FLUX3_MAX_REFS)
         if m.get("ref"):
             return ("Mention them as <image1>, <image2>… <image1> is the edit target. "
                     "Up to %d stills." % QWEN_MAX_REFS)
@@ -11536,6 +13719,92 @@ def launch():
         f = as_frame(p)
         if f:
             add_ref(f)
+
+    # USE ▾ on a take: one click from a finished image to a reference in the right mode.
+    # Before this the only way in was ＋ add + a file dialog into ~/forge-lab/runs/<id>/.
+    USE_TARGETS = (("r2v", "Video", "video", "r2v", "As the character in a video"),
+                   ("i2v", "Video", "video", "i2v", "As the first frame of a video"),
+                   ("flf", "Video", "video", "flf", "As a first / last frame"),
+                   ("edit", "Image", "edit", None, "In an image edit"),
+                   ("cont", "Video", "video", "cont", "Continue this clip"))
+
+    def use_take(path, how):
+        """Switch to the mode `how` names and put this take in as a reference. A video
+        becomes its last frame. A one-reference mode REPLACES its reference; a multi-
+        reference mode ADDS it (so three stills = three clicks). how="here" = the current
+        mode, unchanged."""
+        if not path or not os.path.exists(path):
+            runst.configure(text="that file is gone: %s" % path, fg=C["ochre"])
+            return False
+        f = as_frame(path)
+        if not f:
+            runst.configure(text="couldn't take a frame from %s" % os.path.basename(path),
+                            fg=C["ochre"])
+            return False
+        if how != "here":
+            tgt = next((t for t in USE_TARGETS if t[0] == how), None)
+            if tgt is None:
+                return False
+            _how, kind, md, vm, _lab = tgt
+            if kind_var.get() != kind:
+                kind_var.set(kind)
+                on_kind()
+            pick_model(model_label(md, video_mode=vm))
+        cap = _ref_cap()
+        if not cap:
+            runst.configure(text="this mode does not use references", fg=C["ochre"])
+            return False
+        refs = [r for r in (st.get("refs") or []) if r != f]
+        if cap == 1:
+            refs = []
+        elif len(refs) >= cap:
+            runst.configure(text="%d references is the limit here — remove one first" % cap,
+                            fg=C["ochre"])
+            return False
+        st["refs"] = refs + [f]
+        _plog("use take: %s -> %s (ref %d of %d)" % (os.path.basename(f), how, len(st["refs"]),
+                                                    cap))
+        _render_refs()
+        runst.configure(text="%s is reference %d in %s — write the prompt and Run"
+                        % (os.path.basename(f), len(st["refs"]), model_var.get()),
+                        fg=C["moss"])
+        return True
+
+    def use_in_app(path, key):
+        """USE ▾ -> an app, with this take already picked (a video gives its last frame)."""
+        f_ = as_frame(path)
+        if not f_:
+            runst.configure(text="couldn't take a frame from %s" % os.path.basename(path),
+                            fg=C["ochre"])
+            return None
+        w_ = open_apps_workspace()
+        w_.ap["pick"](key)
+        w_.ap["set"]("image", f_)
+        return w_
+
+    def _use_menu(parent, path, bg):
+        """The USE ▾ button on a take row."""
+        mb = tk.Menubutton(parent, text="USE ▾", bg=C["ochre"], fg="#14110f",
+                           activebackground=C["rust"], activeforeground="#fff",
+                           relief="flat", font=fsm, padx=8, pady=4, borderwidth=0,
+                           cursor="hand2")
+        m = tk.Menu(mb, tearoff=0, bg=C["panel2"], fg="#000000", font=fsm)
+        vid = path.lower().endswith((".mp4", ".webm", ".mov"))
+        for how, _k, _m, _v, lab in USE_TARGETS:
+            if how == "cont" and not vid:
+                continue
+            m.add_command(label=(lab + " (its last frame)") if vid and how != "cont" else lab,
+                          command=lambda h=how: use_take(path, h))
+        m.add_separator()
+        m.add_command(label="Add to this mode's references",
+                      command=lambda: use_take(path, "here"))
+        m.add_separator()
+        for _ak, _al in (("talk", "Make it talk (Apps)"), ("move", "Make it move (Apps)"),
+                         ("outfit", "Swap the outfit (Apps)"), ("angle", "New angle (Apps)")):
+            m.add_command(label=_al, command=lambda k=_ak: use_in_app(path, k))
+        mb.configure(menu=m)
+        mb._menu = m
+        return mb
 
     def params():
         def num(w, d):
@@ -11661,9 +13930,15 @@ def launch():
             _basis += "   ·   nothing has been submitted yet"
         _own = sum(float(i.get("est") or 0) for i in st["active"].values())
         _qn = queue_note(st.get("queue_ahead", 0), _own)
-        est_lbl.configure(text="~%s   ·   %s   ·   %d steps\n%s%s" % (
-            fmt(est), MODES[st["mode"]]["label"], p["steps"], _basis,
-            ("\n" + _qn) if _qn else ""))
+        if not st.get("machine_room"):              # plain: the time, and why it's longer
+            _basis = ("includes loading the model (%s)" % fmt(engine_load_s(st["mode"]))
+                      if _sw else "the model is already loaded")
+            est_lbl.configure(text="about %s\n%s%s" % (
+                fmt(est), _basis, ("\n" + _qn) if _qn else ""))
+        else:
+            est_lbl.configure(text="~%s   ·   %s   ·   %d steps\n%s%s" % (
+                fmt(est), MODES[st["mode"]]["label"], p["steps"], _basis,
+                ("\n" + _qn) if _qn else ""))
         qc = QUALITY.get(qvar.get()) or {}
         if qc.get("steps") is not None:
             drift = int(p["steps"]) != qc["steps"]
@@ -11867,6 +14142,12 @@ def launch():
                  bg=C["panel"], fg=C["muted"], font=fsm).pack(anchor="w", padx=16,
                                                               pady=(0, 14))
 
+    def _job_title(mode, p):
+        """What this run is called in the queue: 'Image · Video — a barn at dawn'."""
+        lab = (MODES.get(mode) or {}).get("label") or mode
+        hint = " ".join(str(p.get("prompt") or "").split())[:34]
+        return ("%s — %s" % (lab, hint)) if hint else str(lab)
+
     def do_run():
         p = params()
         if not p["prompt"]:
@@ -11881,12 +14162,39 @@ def launch():
                  [os.path.basename(x) for x in (st.get("refs") or [])][:3]))
 
         def work():
+            # 2026-10-22: a RUN is now a QUEUE ENTRY (dispatch.admit_render). The worker below
+            # is unchanged — it still submits and the app still watches the pid — but it first
+            # asks the queue for a card: busy cards mean this run WAITS, visibly, on the Home
+            # tab, instead of being refused or racing the other one onto the same card. The
+            # entry stays "running" (holding the card) until track() sees the take finish.
+            gate = None
             try:
+                _m = st["mode"]
+                if _dsp is not None:
+                    gate = _dsp.admit_render(_m, p, title=_job_title(_m, p), est_s=est_now or 0)
+                    if not _dsp.running():
+                        gate.go_now()         # no scheduler in this session: run, unpinned
+                    else:
+                        q.put(("waiting", gate.id, gate))
+                        _last = {"m": ""}
+
+                        def _say(m, _g=gate):
+                            if m != _last["m"]:
+                                _last["m"] = m
+                                q.put(("waiting_msg", _g.id, m))
+                        if not gate.wait(_say):
+                            q.put(("failed", "you took that run off the queue"))
+                            return
+                        if gate.port:
+                            # the lane the queue CHECKED and CLAIMED — pin the submit to it, or
+                            # the app's balancing could use the other card behind its back
+                            p["port"] = gate.port
                 if p.get("gpus") == 2:
                     # ⚠️ In the WORKER thread, never the Tk thread: the unload + re-check
                     # blocks for up to ~10 s. Ollama is pinned to GPU1 (~19 GB); a 2-card
                     # Raylight render needs ~21 GB on that same card, so a resident writer is
-                    # an OOM — refuse rather than submit into it.
+                    # an OOM — refuse rather than submit into it. (The dispatcher's own room
+                    # check already freed what was idle; this is the belt to its braces.)
                     try:
                         from director import Director
                         _ok, _msg = turbo_preflight(Director(),
@@ -11896,27 +14204,52 @@ def launch():
                                            % type(_exc).__name__)
                     _plog("turbo preflight: ok=%s %s" % (_ok, _msg))
                     if not _ok:
+                        if gate is not None:
+                            gate.fail(_msg)
                         q.put(("failed", _msg))
                         return
+                    # ⚠️ The writer is not the only thing on card 2 (a second ComfyUI held 21 GB
+                    # for 4 days once). Ask the card manager; ComfyUI's OWN queue is not a
+                    # blocker (a Turbo run just waits its turn there).
+                    try:
+                        import cards as _cards
+                        _cards.preflight("turbo", card=1, same_queue_port=F_PORT)
+                    except Exception as _cb:
+                        if type(_cb).__name__ == "CardBusy":
+                            if gate is not None:
+                                gate.fail(_cb)
+                            q.put(("cardbusy", _cb))
+                            return
                 _eng = engine_of(st["mode"])
                 pid, seed = submit(st["mode"], p, st.get("refs"))
                 _plog("submit ok: %s seed=%s" % (pid[:8], seed))
-                q.put(("submitted", pid, seed, est_now, _eng))
+                q.put(("submitted", pid, seed, est_now, _eng, gate))
             except Exception as e:
                 _plog("submit FAILED: %s: %s" % (type(e).__name__, e))
+                if gate is not None:
+                    gate.fail("%s: %s" % (type(e).__name__, e))
                 q.put(("failed", "%s: %s" % (type(e).__name__, e)))
         threading.Thread(target=work, daemon=True).start()
 
     run_btn.configure(command=do_run)
 
     def cancel_my_queued():
-        """⚠️ Only THIS app's runs (st["active"]) — never a blanket clear of forge's queue."""
+        """⚠️ Only THIS app's runs (st["active"]) — never a blanket clear of forge's queue.
+        Also takes YOUR runs off OUR queue: deleting the entry is what a waiting worker sees,
+        so it stops instead of sitting there waiting for a card nobody will give it."""
         pids = list(st["active"].keys())
         runst.configure(text="asking forge to drop your waiting runs…", fg=C["muted"])
 
         def work():
             try:
-                q.put(("cancelled", cancel_queued(pids)))
+                _dw = 0
+                for _jid in list((st.get("waiting") or {}).keys()):
+                    try:
+                        if _dsp is not None and _dsp.queue().remove(_jid):
+                            _dw += 1
+                    except Exception:
+                        pass
+                q.put(("cancelled", cancel_queued(pids), _dw))
             except Exception as e:
                 q.put(("failed", "cancel: %s: %s" % (type(e).__name__, e)))
         threading.Thread(target=work, daemon=True).start()
@@ -11944,11 +14277,26 @@ def launch():
                 # the whole pump down: the reschedule below was skipped, so takes
                 # and results sat in the queue forever and the UI went stale.
                 try:
-                    if msg[0] == "submitted":
+                    if msg[0] == "waiting":
+                        # a RUN that is in the QUEUE, not on a card yet (2026-10-22): keep the
+                        # button live — queuing another is the point — and say where it is.
+                        _plog("drain: waiting for a card (%s)" % msg[1])
+                        st.setdefault("waiting", {})[msg[1]] = msg[2]
+                        runst.configure(text="waiting for a card — it is in the queue on the "
+                                             "Home tab", fg=C["ochre"])
+                        run_btn.configure(state="normal")
+                    elif msg[0] == "waiting_msg":
+                        if msg[1] in (st.get("waiting") or {}):
+                            runst.configure(text=msg[2], fg=C["ochre"])
+                    elif msg[0] == "submitted":
                         _plog("drain: submitted %s" % msg[1][:8])
                         st["seed_used"] = msg[2]
+                        _gate = msg[5] if len(msg) > 5 else None
+                        if _gate is not None:
+                            (st.get("waiting") or {}).pop(_gate.id, None)
                         st["active"][msg[1]] = {"t": time.time(),
-                                                "est": msg[3] if len(msg) > 3 else None}
+                                                "est": msg[3] if len(msg) > 3 else None,
+                                                "gate": _gate}
                         st["focus"] = msg[1]
                         # the engine that just loaded is now resident — the next estimate
                         # for the SAME engine drops its load term, a different one keeps it
@@ -11957,17 +14305,35 @@ def launch():
                             refresh_estimate()
                         runst.configure(text="sampling on forge — seed %s  ·  %d run(s) in flight"
                                         % (msg[2], len(st["active"])), fg=C["muted"])
+                        # anything held so this run could go first goes back in line BEHIND it
+                        threading.Thread(target=lambda: __import__("cards").release("main"),
+                                         daemon=True).start()
                         run_btn.configure(state="normal")   # queue another if you like
                     elif msg[0] == "cancelled":
+                        _dw = msg[2] if len(msg) > 2 else 0
+                        st["waiting"] = {}
                         for _pid in msg[1]:
+                            _i = (st["active"].get(_pid) or {}).get("gate")
+                            if _i is not None:
+                                _i.fail("cancelled from forge's queue")
                             st["active"].pop(_pid, None)
                         if st.get("focus") not in st["active"]:
                             st["focus"] = next(iter(st["active"]), None)
-                        runst.configure(text=("cancelled %d waiting run(s)" % len(msg[1]))
-                                        if msg[1] else
+                        runst.configure(text=("cancelled %d waiting run(s)" % (len(msg[1]) + _dw))
+                                        if (msg[1] or _dw) else
                                         "nothing of yours was waiting in forge's queue",
                                         fg=C["ochre"])
                         load_takes()
+                    elif msg[0] == "cardbusy":
+                        _plog("drain: card busy — %s" % msg[1])
+                        runst.configure(text=str(msg[1]), fg=C["ochre"])
+                        run_btn.configure(state="normal")
+                        import cards_ui
+                        cards_ui.handle(
+                            root, msg[1], {"C": C, "fonts": {"f": f, "fh": fh, "fsm": fsm}},
+                            retry=do_run, owner="main",
+                            say=lambda m, warn=False: runst.configure(
+                                text=m, fg=C["ochre"] if warn else C["muted"]))
                     elif msg[0] == "failed":
                         _plog("drain: failed — %s" % msg[1])
                         runst.configure(text="forge refused: " + msg[1], fg=C["rust"])
@@ -12060,15 +14426,37 @@ def launch():
                 _gpu_cache["busy"] = False
         threading.Thread(target=work, daemon=True).start()
 
+    _rs = {"busy": False, "res": {}}
+
+    def _poll_states():
+        """run_state() is two HTTP calls to forge (up to 15 s each when it drops off the
+        network): ask in a worker, never on the Tk thread (the code review: a stutter every
+        1.2 s for the whole render, a hang when forge is unreachable)."""
+        if _rs["busy"] or not st["active"]:
+            return
+        _rs["busy"] = True
+        pids = list(st["active"].keys())
+
+        def work():
+            try:
+                for p_ in pids:
+                    try:
+                        _rs["res"][p_] = run_state(p_)
+                    except Exception:
+                        pass
+            finally:
+                _rs["busy"] = False
+        threading.Thread(target=work, daemon=True).start()
+
     def track():
         # Poll EVERY run in flight. Tracking only the newest pid meant a second
         # Run press abandoned the first one: it finished on forge and was never
         # collected, while the index kept it listed as "running" forever.
+        _poll_states()
         for pid in list(st["active"].keys()):
             info = st["active"][pid]
-            try:
-                s = run_state(pid)
-            except Exception:
+            s = _rs["res"].pop(pid, None)
+            if s is None:
                 continue
             age = time.time() - info["t"]
             if info.get("last_state") != s["state"]:
@@ -12076,6 +14464,11 @@ def launch():
                 _plog("run %s: %s at %.0fs" % (pid[:8], s["state"], age))
             if s["state"] == "done":
                 del st["active"][pid]
+                # the take is FINISHED, so the card goes back to the queue NOW — not after the
+                # download below (a running entry is what holds the card).
+                _g = info.get("gate")
+                if _g is not None:
+                    _g.done()
                 if st.get("focus") == pid:
                     st["focus"] = next(iter(st["active"]), None)
                 canvas_bar.coords(bar, 0, 0, canvas_bar.winfo_width(), 9)
@@ -12096,6 +14489,8 @@ def launch():
                 threading.Thread(target=work, daemon=True).start()
             elif s["state"] == "error":
                 del st["active"][pid]
+                if info.get("gate") is not None:
+                    info["gate"].fail(s.get("detail") or "execution error on forge")
                 if st.get("focus") == pid:
                     st["focus"] = next(iter(st["active"]), None)
                 runst.configure(text="execution error: " + (s.get("detail") or ""),
@@ -12109,6 +14504,8 @@ def launch():
                 info["misses"] = info.get("misses", 0) + 1
                 if info["misses"] >= 10 and age > 20:
                     del st["active"][pid]
+                    if info.get("gate") is not None:
+                        info["gate"].fail("the run is no longer on forge")
                     if st.get("focus") == pid:
                         st["focus"] = next(iter(st["active"]), None)
 
@@ -12137,7 +14534,8 @@ def launch():
         elif st["active"]:
             st["focus"] = next(iter(st["active"]), None)
 
-        _gpu_poll()
+        if gpu_lbl.winfo_ismapped():
+            _gpu_poll()        # an ssh per call: only while the line is on screen (hidden)
         g = _gpu_cache["rows"]
         if g:
             g = g[0]
@@ -12178,22 +14576,34 @@ def launch():
                 pass
         # Report the SOCKET state, not when a message last arrived: forge is silent
         # whenever idle, so recency flagged "no feed" on a healthy connection.
+        # PLAIN WORDS up here (review panel, new user: "cuda:0 NVIDIA GeForce RTX 3090",
+        # cut off, and "progress: connecte" meant nothing). The engine detail lives in the
+        # machine room (Show the machine room, under RUN).
+        machine = st.get("machine_room")
         if WS_CONNECTED:
             streaming = (time.time() - WS_LAST) < 20
-            ws_txt.configure(text=("progress: streaming" if streaming
-                                   else "progress: connected"), fg=C["moss"])
+            ws_txt.configure(text=(("progress: streaming" if streaming
+                                    else "progress: connected") if machine else ""),
+                             fg=C["moss"])
         else:
-            ws_txt.configure(text="progress: reconnecting…", fg=C["ochre"])
+            # only worth saying while something renders (or in the machine room): idle, the
+            # orange line read as "the app is broken" (round-2 review, new user)
+            ws_txt.configure(text=("live progress: reconnecting\u2026"
+                                   if (machine or st.get("active")) else ""), fg=C["ochre"])
         if dev:
             dot.configure(fg=C["moss"])
-            stxt.configure(text="forge up" + (("  ·  %d running, %d queued"
-                             % (len(qu.get("queue_running") or []),
-                                len(qu.get("queue_pending") or [])))
-                             if isinstance(qu, dict) else ""))
-            gtxt.configure(text=dev.get("name", "")[:34])
+            _nr = len(qu.get("queue_running") or []) if isinstance(qu, dict) else 0
+            _nq = len(qu.get("queue_pending") or []) if isinstance(qu, dict) else 0
+            if _nr or _nq:
+                dot.configure(fg=C["ochre"])
+                stxt.configure(text="Computer: busy \u2014 making %d%s"
+                               % (max(_nr, 1), ", %d waiting" % _nq if _nq else ""))
+            else:
+                stxt.configure(text="Computer: ready")
+            gtxt.configure(text=dev.get("name", "")[:34] if machine else "")
         else:
             dot.configure(fg=C["rust"])
-            stxt.configure(text="forge unreachable — retrying")
+            stxt.configure(text="Computer: not connected \u2014 retrying")
             gtxt.configure(text="")
 
     def apply_status():
@@ -12260,7 +14670,7 @@ def launch():
         def gather():
             try:
                 data = []
-                for it in read_index()[:40]:
+                for it in filter_kind(read_index(), st.get("take_kind", "All"))[:TAKES_SHOWN]:
                     path = None
                     if it.get("images"):
                         cand = os.path.join(RUNS, it["id"], it["images"][0]["file"])
@@ -12269,7 +14679,6 @@ def launch():
                     data.append((it, path))
                 _plog("load_takes: %d entries, %d with an image file"
                       % (len(data), sum(1 for _, pp in data if pp)))
-                q.put(("takes", data))
             except Exception as exc:
                 _log_err("load_takes gather failed: %r" % exc)
                 _plog("load_takes FAILED: %r" % exc)
@@ -12290,6 +14699,26 @@ def launch():
 
     _rows = {"n": 0}
     _toggle_refs = []        # (button, is_on) rebuilt each render; repainted AFTER _btn_colors
+    _fav_btns = []           # (♥ button, its take's prompt) — repainted when a save changes
+
+    def _refavs():
+        saved = {d["prompt"].strip() for d in fav_list()}
+        for b_, p_ in list(_fav_btns):
+            try:
+                _style_toggle(b_, (p_ or "").strip() in saved, C)
+            except Exception:
+                pass
+
+    def _fav_take(it, b_):
+        on = fav_toggle(it.get("prompt"), it.get("mode"), it.get("id"))
+        _refavs()
+        try:
+            _fav_count()
+        except Exception:
+            pass
+        runst.configure(text=("\u2665 prompt saved \u2014 SAVED PROMPTS under the prompt box"
+                              if on else "prompt removed from SAVED PROMPTS"), fg=C["muted"])
+        return on
 
     def _sync_compare_btn():
         nsel = len(st.get("cmp_sel") or [])
@@ -12358,6 +14787,121 @@ def launch():
     cmp_btn.configure(command=open_compare_window)
     _sync_compare_btn()
 
+    _del_boxes = {}          # take id -> (its ☐ label, its row) for the CURRENT render
+
+    def _del_sel():
+        return st.setdefault("del_sel", [])
+
+    def _sync_bulk():
+        sel = _del_sel()
+        shown_ids = list(_del_boxes)
+        n = len(sel)
+        bulk_del.configure(text="DELETE SELECTED (%d)" % n,
+                           state="normal" if n else "disabled")
+        all_on = bool(shown_ids) and all(i in sel for i in shown_ids)
+        bulk_all.configure(text=("\u2611 select all shown" if all_on
+                                 else "\u2610 select all shown"),
+                           fg=C["ochre"] if all_on else C["ink"])
+        for pid, (box, row) in _del_boxes.items():
+            on = pid in sel
+            try:
+                box.configure(text="\u2611" if on else "\u2610",
+                              fg=C["ochre"] if on else C["muted"])
+                row.configure(highlightbackground=C["ochre"] if on else C["line"])
+            except Exception:
+                pass
+
+    def _del_toggle(pid, shift=False):
+        """☐ on a take. Shift-click ticks everything between the last one and this one."""
+        sel = _del_sel()
+        order = list(_del_boxes)
+        last = st.get("del_last")
+        if shift and last in order and pid in order:
+            a, b = sorted((order.index(last), order.index(pid)))
+            for i in order[a:b + 1]:
+                if i not in sel:
+                    sel.append(i)
+        elif pid in sel:
+            sel.remove(pid)
+        else:
+            sel.append(pid)
+        st["del_last"] = pid
+        _sync_bulk()
+
+    def _del_all_shown(_e=None):
+        sel = _del_sel()
+        order = list(_del_boxes)
+        if order and all(i in sel for i in order):
+            for i in order:
+                sel.remove(i)
+        else:
+            for i in order:
+                if i not in sel:
+                    sel.append(i)
+        _sync_bulk()
+
+    def _del_clear(_e=None):
+        del _del_sel()[:]
+        _sync_bulk()
+
+    bulk_all.bind("<Button-1>", _del_all_shown)
+    bulk_clear.bind("<Button-1>", _del_clear)
+
+    def _bulk_delete_now():
+        """The removal itself (no dialog) — so a driver can test it and there is ONE path."""
+        ids = list(_del_sel())
+        try:
+            n, nbytes = delete_takes(ids)
+        except Exception as exc:
+            _plog("bulk delete FAILED: %r" % exc)
+            runst.configure(text="delete failed: %s" % exc, fg=C["rust"])
+            return 0
+        del _del_sel()[:]
+        st["cmp_sel"] = [i for i in (st.get("cmp_sel") or []) if i not in ids]
+        _plog("bulk delete: %d take(s), %.1f MB" % (n, nbytes / 1e6))
+        load_takes()
+        runst.configure(text="deleted %d take%s" % (n, "" if n == 1 else "s"), fg=C["muted"])
+        return n
+
+    def _bulk_delete_ask():
+        ids = list(_del_sel())
+        if not ids:
+            return None
+        idx = {i.get("id"): i for i in read_index()}
+        its = [idx[i] for i in ids if i in idx]
+        nbytes = sum((f.get("bytes") or 0) for it in its for f in (it.get("images") or []))
+        top = tk.Toplevel(root)
+        top.title("Delete takes")
+        top.configure(bg=C["panel"])
+        try:
+            top.transient(root)
+        except Exception:
+            pass
+        tk.Label(top, text="DELETE %d take%s?" % (len(its), "" if len(its) == 1 else "s"),
+                 bg=C["panel"], fg=C["ink"], font=fh).pack(anchor="w", padx=16, pady=(14, 4))
+        tk.Label(top, text="Removes their folders in ~/forge-lab/runs/ (%.1f MB) and their "
+                           "entries from Takes.\nThis cannot be undone \u2014 it does not go "
+                           "to the Trash.\nNothing on forge is deleted." % (nbytes / 1e6),
+                 bg=C["panel"], fg=C["muted"], font=fsm, justify="left",
+                 wraplength=460).pack(anchor="w", padx=16, pady=(0, 12))
+        rowb = tk.Frame(top, bg=C["panel"])
+        rowb.pack(anchor="w", padx=16, pady=(0, 14))
+
+        def really():
+            top.destroy()
+            _bulk_delete_now()
+
+        tk.Button(rowb, text="DELETE %d" % len(its), bg=C["ochre"], fg="#14110f",
+                  activebackground="#d8b45f", activeforeground="#14110f",
+                  relief="flat", font=fsm, padx=12, pady=7, borderwidth=0,
+                  command=really).pack(side="left", padx=(0, 8))
+        tk.Button(rowb, text="CANCEL", bg=C["panel2"], fg=C["ink"], relief="flat",
+                  font=fsm, padx=12, pady=7, borderwidth=0,
+                  highlightthickness=1, highlightbackground=C["line"],
+                  command=top.destroy).pack(side="left")
+        top.bulk_really = really
+        return top
+
     def render_takes(data):
         _dbg("render_takes rows=%d  tcanvas.yview before=%s"
              % (len(data), tuple(round(v, 3) for v in tcanvas.yview())))
@@ -12369,18 +14913,31 @@ def launch():
         shown = [(it, p) for it, p in data if it.get("id") in _keep]
         growth = len(shown) > _rows["n"]      # a new take was added
         _rows["n"] = len(shown)
-        takes_hdr.configure(text="%d of %d take%s  ·  every run is kept in "
+        _kn = {"Images": "image", "Videos": "video", "Songs": "song"}.get(
+            st.get("take_kind", "All"), "take")
+        takes_hdr.configure(text="%d of %d %s%s  ·  every run is kept in "
                                  "~/forge-lab/runs/  ·  click a thumbnail to open it full size"
-                                 % (len(shown), len(data), "" if len(data) == 1 else "s"))
+                                 % (len(shown), len(data), _kn, "" if len(data) == 1 else "s"))
         for w in tinner.winfo_children():
             w.destroy()
         take_rows.clear()
         del _toggle_refs[:]
+        del _fav_btns[:]
+        _del_boxes.clear()
+        _need_posters = []
+        # only what is ON SCREEN can stay ticked: a filter change or a delete elsewhere drops
+        # the rest, so DELETE SELECTED never removes a take you can't see
+        _alive = {it.get("id") for it, _p in shown}
+        st["del_sel"] = [i for i in _del_sel() if i in _alive]
         if not shown:
             tk.Label(tinner, text=("No takes match this filter." if data
-                                   else "No takes yet."),
+                                   else "No %s yet." % {"Images": "pictures",
+                                                         "Videos": "videos",
+                                                         "Songs": "songs"}.get(
+                                       st.get("take_kind", "All"), "takes")),
                      bg=C["bg"], fg=C["muted"], font=fsm, anchor="w").pack(anchor="w", pady=10)
             _sync_compare_btn()
+            _sync_bulk()
             return
         for it, path in shown:
             rating = take_rating(it)
@@ -12389,18 +14946,43 @@ def launch():
             row = tk.Frame(tinner, bg=row_bg, highlightthickness=1,
                            highlightbackground=C["line"])
             row.pack(fill="x", pady=4)
+            # ☐ select for DELETE SELECTED (a Label: macOS draws it as asked)
+            # big enough to hit: at the heading size the box drew ~8 px on the Mac
+            box = tk.Label(row, text="\u2610", bg=row_bg, fg=C["muted"],
+                           font=("Helvetica", 22), cursor="hand2", padx=4)
+            box.pack(side="left", padx=(6, 0))
+            box.bind("<Button-1>", lambda e, i=it["id"]: _del_toggle(i))
+            box.bind("<Shift-Button-1>", lambda e, i=it["id"]: (_del_toggle(i, shift=True),
+                                                                 "break")[1])
+            _del_boxes[it["id"]] = (box, row)
             thumb = None
-            if path:
+            vid = bool(path and path.lower().endswith((".mp4", ".webm", ".mov")))
+            if path and vid:
+                # a video: its poster frame (made off the Tk thread; until then "[video]")
+                _pst = video_poster(path, make=False)
+                if _pst:
+                    thumb = thumb_photo(_pst, 190)
+                else:
+                    _need_posters.append(path)
+                if thumb is not None:
+                    THUMBS[it["id"]] = thumb
+            elif path:
                 # ⚠️ THIS is the line that bricked the app: a `remove background` take is an
                 # RGBA PNG, and tk.PhotoImage on it never returned (see thumb_photo).
                 thumb = thumb_photo(path, 190)
                 if thumb is not None:
                     THUMBS[it["id"]] = thumb
-            vid = bool(path and path.lower().endswith((".mp4", ".webm")))
+            _song = take_kind(it) == "song"
             thumb_lbl = tk.Label(row, bg=row_bg, image=thumb,
-                                 text="" if thumb else ("[video]" if vid else "[no preview]"),
+                                 text="" if thumb else ("[video]" if vid else
+                                                        "\u266a song" if _song else
+                                                        "[no preview]"),
                                  fg=C["faint"] if rejected else C["muted"], font=fsm,
                                  width=0 if thumb else 16)
+            if thumb is not None and vid:
+                # ▶ over the poster: it is a clip, and a click plays it
+                thumb_lbl.configure(text="\u25b6", compound="center", fg="#ffffff",
+                                    font=("Helvetica", 28))
             thumb_lbl.pack(side="left", padx=8, pady=8)
             if path:
                 # click the thumbnail -> full-size image in Preview
@@ -12452,6 +15034,15 @@ def launch():
             star_b.pack(side="left", padx=(0, 3))
             rej_b.pack(side="left", padx=(0, 3))
             sel_b.pack(side="left")
+            if (it.get("prompt") or "").strip():
+                # ♥ = save THIS take's prompt to SAVED PROMPTS (★ rates the picture)
+                fav_b = tk.Button(rate_row, text="\u2665", bg=C["panel2"], fg=C["ink"],
+                                  activebackground=C["rust"], activeforeground="#fff",
+                                  relief="flat", font=fsm, padx=6, pady=0, borderwidth=0)
+                fav_b.pack(side="left", padx=(3, 0))
+                fav_b.configure(command=lambda i=it, b=fav_b: _fav_take(i, b))
+                _toggle_refs.append((fav_b, fav_has(it.get("prompt"))))
+                _fav_btns.append((fav_b, it.get("prompt")))
             star_b.configure(command=lambda i=it: _rate(i, 1))
             rej_b.configure(command=lambda i=it: _rate(i, -1))
             sel_b.configure(command=lambda i=it, b=sel_b: _cmp_toggle(i, b))
@@ -12474,6 +15065,8 @@ def launch():
                           highlightthickness=1, highlightbackground=C["line"],
                           command=lambda i=it, p=path: promote_dialog(i, p)
                           ).pack(pady=(0, 4))
+            if path:
+                _use_menu(btns, path, row_bg).pack(fill="x", pady=(0, 4))
             tk.Button(btns, text="LOAD SETTINGS", bg=C["panel2"], fg=C["ink"],
                       disabledforeground=C["dim"],
                       relief="flat", font=fsm, padx=8, pady=4, borderwidth=0,
@@ -12497,6 +15090,38 @@ def launch():
         for _b, _on in _toggle_refs:
             _style_toggle(_b, _on, C)
         _sync_compare_btn()
+        _sync_bulk()
+        if _need_posters:
+            _make_posters(_need_posters)
+
+    def _make_posters(paths):
+        """Make the missing poster frames on a worker, then ask for ONE redraw (the flag the
+        main pump already watches). Never two at once; a clip that won't give a frame is
+        remembered, so a broken file can't trigger redraw after redraw."""
+        if st.get("_posters_busy"):
+            return
+        bad = st.setdefault("_poster_bad", set())
+        todo = [p for p in dict.fromkeys(paths) if p not in bad]
+        if not todo:
+            return
+        st["_posters_busy"] = True
+
+        def work():
+            made = 0
+            try:
+                for p_ in todo:
+                    if video_poster(p_):
+                        made += 1
+                    else:
+                        bad.add(p_)
+            except Exception as exc:
+                _log_err("posters failed: %r" % exc)
+            finally:
+                st["_posters_busy"] = False
+                st["_posters_made"] = st.get("_posters_made", 0) + made
+                if made:
+                    st["_takes_dirty"] = True      # drain() reloads the list once
+        threading.Thread(target=work, daemon=True).start()
 
     def open_full(path):
         """Full size hands off to macOS Preview: native zoom/pan, no re-encoding,
@@ -12521,8 +15146,9 @@ def launch():
             if (os.path.isdir(d)
                     and os.path.abspath(d).startswith(os.path.abspath(RUNS) + os.sep)):
                 shutil.rmtree(d, ignore_errors=True)
-            left = [i for i in read_index() if i.get("id") != tid]
-            json.dump(left, open(_index_path(), "w"), indent=1)
+            with _index_lock():
+                left = [i for i in read_index() if i.get("id") != tid]
+                _index_write(left)
             _plog("delete: %s — %d file(s), %.1f MB, %d takes left"
                   % (tid[:8], len(files), nbytes / 1e6, len(left)))
             load_takes()
@@ -12647,7 +15273,9 @@ def launch():
                 "src_frames": st.get("src_frames"),
                 "s2v_len": s2v_len_var.get(),
                 "take_filter": takes_filter_var.get(),
+                "take_kind": st.get("take_kind", "All"),
                 "take_unkept": bool(st.get("take_unkept", False)),
+                "machine_room": bool(st.get("machine_room")),
                 "geometry": root.geometry()}
 
     def save_now():
@@ -12676,9 +15304,42 @@ def launch():
 
     root.protocol("WM_DELETE_WINDOW", lambda: (save_now(), root.destroy()))
 
+    # ---- HOME TAB -------------------------------------------------------------
+    # A page of its own (Ryan, 2026-10-22): queue + machine room + recent takes. Built
+    # LAST so every font is in scope, and because dock.window() selects what it creates
+    # this also makes Home the tab the app opens on.
+    if _dockref["d"] is not None:
+        try:
+            open_home_tab()
+        except Exception as _hpexc:
+            _log_err("home tab unavailable: %r" % _hpexc)
+
     # ------------------------------------------------------------- kick off
     _s = load_settings()
     _first = not _s
+    # Land on the HOME page by default (Ryan, 2026-10-22: he asked for a homepage and the
+    # app was opening straight onto Quick, which hid it). Settings "open_on": "quick" still
+    # puts Quick on top for anyone who wants that.
+    if not _DRIVER and _s.get("open_on", "home") == "quick":
+        # Quick opens on top at launch — the main window (Studio) stays one click behind it
+        root.after(900, lambda: open_quick_workspace())
+    if not _DRIVER:
+        # a START_NOW flag in DATA/nightshift: tonight's list starts by itself (nightshift.py)
+        def _night_autostart():
+            # checked at launch and then every minute: a START_NOW flag dropped while the
+            # app is open starts the list too (no relaunch needed)
+            try:
+                import nightshift as _ns
+                _ns.autostart()
+            except Exception as exc:
+                print("night autostart failed: %r" % (exc,))
+            root.after(60000, _night_autostart)
+        root.after(4000, _night_autostart)
+        try:                                   # DATA/inbox: pictures Claude asks for (picture_inbox.py)
+            import picture_inbox as _pi
+            _pi.start()
+        except Exception as exc:
+            print("picture inbox failed to start: %r" % (exc,))
     if _s.get("aspect") in ASPECTS:
         avar.set(_s["aspect"])
     if (_s.get("quality") in QUALITY or _s.get("quality") in WAN_QUALITY
@@ -12711,6 +15372,8 @@ def launch():
         takes_filter_var.set(_s["take_filter"])
     st["take_unkept"] = bool(_s.get("take_unkept", False))
     _style_toggle(unkept_btn, st["take_unkept"], C)
+    st["take_kind"] = _s.get("take_kind") if _s.get("take_kind") in KIND_FILTERS else "All"
+    _paint_kind()
     if _s.get("prompt"):
         prompt.delete("1.0", "end")
         prompt.insert("1.0", _s["prompt"])
@@ -12722,6 +15385,18 @@ def launch():
     if _s.get("geometry"):
         try:
             root.geometry(_s["geometry"])
+        except Exception:
+            pass
+    if _tabs_on:
+        # the workspaces were laid out for ~1240 px windows of their own: with tabs they live
+        # beside the sidebar, so the main window grows to hold them (never past the screen)
+        try:
+            _sw, _sh = root.winfo_screenwidth(), root.winfo_screenheight()
+            _cw, _ch = [int(v) for v in root.geometry().split("+")[0].split("x")]
+            _gw = max(_cw, min(1460, _sw - 20))
+            _gh = max(_ch, min(880, _sh - 80))
+            if (_gw, _gh) != (_cw, _ch):
+                root.geometry("%dx%d" % (_gw, _gh))
         except Exception:
             pass
     set_mode(_s.get("mode") if _s.get("mode") in MODES else "t2i")
@@ -12758,6 +15433,2258 @@ def launch():
     # prove the WIRING: that the workspace opens and lists what is on disk, that its LOAD puts
     # the prompt, the seed and ref 1 onto the form, and that picking "Character" twice does not
     # stack two identical windows. Runs against a TEMP store, so it touches no real character.
+    # ---- test driver: the SEED box reaches the render; the used seed is saved (bug fix 5) ----
+    # FORGE_LAB_TESTCHARSEED=1 FORGE_LAB_NOAUTOSAVE=1 FORGE_LAB_DATA=$(mktemp -d) python3 forge_lab.py
+    if os.environ.get("FORGE_LAB_TESTCHARSEED") == "1":
+        def _tcs():
+            fails = []
+
+            def ck(cond, label):
+                print("  %-4s %s" % ("ok" if cond else "FAIL", label), flush=True)
+                if not cond:
+                    fails.append(label)
+
+            g = globals()
+            real = {k: g[k] for k in ("submit", "run_state", "collect")}
+            sent = []
+            png = os.path.join(RUNS, "fakec", "c.png")
+            os.makedirs(os.path.dirname(png), exist_ok=True)
+            with open(png, "wb") as fh_:
+                fh_.write(open(os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                                            "assets", "anvil-icon.png"), "rb").read())
+
+            def fake_submit(mode, p, refs=None):
+                sent.append(p)
+                return "fakec", (p["seed"] if p["seed"] >= 0 else 424242)
+            g["submit"] = fake_submit
+            g["run_state"] = lambda pid: {"state": "done"}
+            g["collect"] = lambda pid: {"id": "fakec", "images": [{"file": "c.png"}]}
+            try:
+                w = open_character_workspace()
+                root.update()
+                sw = w.char_widgets["seed"]
+                w.char_prompt.delete("1.0", "end")
+                w.char_prompt.insert("1.0", "a stern innkeeper, waist up")   # a pick would fill it
+
+                def render():
+                    # wait for THIS render: a new submit AND the status naming its seed
+                    n0 = len(sent)
+                    w.char_render()
+                    t0 = time.time()
+                    while time.time() - t0 < 15:
+                        root.update()
+                        if len(sent) > n0:
+                            _sd = sent[-1]["seed"] if sent[-1]["seed"] >= 0 else 424242
+                            if ("seed %s " % _sd) in w.char_status.cget("text"):
+                                return
+                        time.sleep(0.1)
+
+                sw.delete(0, "end"); sw.insert(0, "-1")
+                render()
+                ck(sent and sent[-1]["seed"] == -1, "SEED -1 still asks for a new face (-1)")
+                ck(w.char_grab()["seed"] == "424242",
+                   "...and SAVE keeps the seed forge USED (%r), not -1" % w.char_grab()["seed"])
+                sw.delete(0, "end"); sw.insert(0, "777")
+                render()
+                ck(sent[-1]["seed"] == 777, "a SEED of 777 is what the render gets (%r)"
+                   % sent[-1]["seed"])
+                ck(w.char_grab()["seed"] == "777", "...and what SAVE keeps")
+                sw.delete(0, "end"); sw.insert(0, "-1")
+                w.char_set_still(None)
+                ck(w.char_grab()["seed"] == "-1",
+                   "a cleared still forgets its render seed (back to -1)")
+            finally:
+                g.update(real)
+            print("TESTCHARSEED %s" % ("FAILED" if fails else "done"), flush=True)
+            for _f in fails:
+                print("   FAILED: %s" % _f, flush=True)
+            root.after(200, root.destroy)
+        root.after(1500, _tcs)
+    # ---- test driver: the NEW Dialogue screen (dialogue2_ui) end to end (rig faked) ----
+    # FORGE_LAB_TESTDIALOGUE3=1 FORGE_LAB_NOAUTOSAVE=1 FORGE_LAB_DATA=$(mktemp -d) python3 forge_lab.py
+    if os.environ.get("FORGE_LAB_TESTDIALOGUE3") == "1":
+        def _td3():
+            import dialogue as _dlg
+            import scene_engine as _se
+            import director as _dirm
+            fails = []
+
+            def ck(cond, label):
+                print("  %-4s %s" % ("ok" if cond else "FAIL", label), flush=True)
+                if not cond:
+                    fails.append(label)
+
+            def wait(cond, secs=20):
+                t0 = time.time()
+                while time.time() - t0 < secs:
+                    root.update()
+                    if cond():
+                        return True
+                    time.sleep(0.05)
+                return False
+
+            def ff(out, hz=440, d=0.6):
+                os.makedirs(os.path.dirname(out), exist_ok=True)
+                subprocess.run(["ffmpeg", "-v", "error", "-y", "-f", "lavfi", "-i",
+                                "sine=f=%d:d=%s" % (hz, d), "-ar", "24000", "-ac", "1", out],
+                               capture_output=True, timeout=60)
+
+            # a saved character with a bible voice
+            write_character("gustav", {"name": "Gustav", "picks": {"Subject": "an elderly man"},
+                                       "bible": {"who": "A retired Viennese conductor.",
+                                                 "voice": "a dry, precise, weary baritone"}})
+            RIG = {"calls": [], "raise": None, "heard": {}}
+
+            def f_tts(job, out_dir, language="English", engine="qwen"):
+                RIG["calls"].append({"design": [d["id"] for d in job.get("design") or []],
+                                     "clone": [c["text"] for c in job.get("clone") or []],
+                                     "engine": engine})
+                if RIG["raise"]:
+                    raise RIG["raise"]
+                items = []
+                for d in (job.get("design") or []):
+                    o = os.path.join(out_dir, d["out"])
+                    ff(o, 300)
+                    items.append({"id": d["id"], "out": o})
+                for c in (job.get("clone") or []):
+                    o = os.path.join(out_dir, c["out"])
+                    ff(o, 500)
+                    items.append({"id": c["id"], "out": o, "duration": 0.6})
+                return {"items": items}
+
+            def f_asr(paths):
+                return [RIG["heard"].get(os.path.basename(p_), "") for p_ in paths]
+            real = (_se.tts_batch, _se.transcribe_many)
+            _se.tts_batch, _se.transcribe_many = f_tts, None
+            _se.transcribe_many = lambda paths: [
+                next((li["text"] for li in (w.d2["st"]["pj"] or {}).get("lines", [])
+                      for t in li.get("takes", []) if os.path.basename(t["file"])
+                      == os.path.basename(p_)), "") for p_ in paths]
+            try:
+                # ---- §1 the sidebar opens THE PAGE
+                w = open_dialogue_workspace()
+                root.update()
+                D = getattr(w, "d2", None)
+                ck(D is not None and w.title() == "Dialogue", "the Dialogue row opens the new page")
+                if D is None:
+                    raise RuntimeError("no new Dialogue window")
+                ck(open_dialogue_workspace() is w, "picking Dialogue again raises the same one")
+                # ---- §2 type lines: Enter adds, the cast appears
+                D["new"]()
+                D["add_spk"].set("GUSTAV")
+                D["add_txt"].set("Twelve kronor. For a loaf.")
+                D["add"]()
+                D["add_spk"].set("ROBIN")
+                D["add_txt"].set("It's rye, Gustav.")
+                D["add"]()
+                D["add_spk"].set("GUSTAV")
+                D["add_txt"].set("Outrageous.")
+                D["add"]()
+                pj = D["st"]["pj"]
+                ck(pj and [l_["text"] for l_ in pj["lines"]] == [
+                    "Twelve kronor. For a loaf.", "It's rye, Gustav.", "Outrageous."],
+                   "three lines typed in, in order")
+                ck(_dlg.load_project(pj["slug"]) is not None, "the scene saved itself")
+                ck(D["add_spk"].get() == "ROBIN", "the next line's speaker is the other one")
+                root.update()
+                ck(D["st"]["step"] == "Lines" and D["tools"].winfo_ismapped()
+                   and D["b_next"].winfo_ismapped()
+                   and D["b_next"].cget("text").startswith("Next: voices")
+                   and not D["b_make"].winfo_ismapped() and D["st"].get("add_entry"),
+                   "STEP 1 Lines: the writing tools, the add row, ONE button: Next: voices")
+                chips = [c.winfo_children() for c in D["cast_row"].winfo_children()
+                         if c.winfo_class() == "Frame"]
+                txt = " ".join(x.cget("text") for ch in chips for x in ch
+                               if x.winfo_class() == "Label")
+                ck("Gustav" in txt and "Robin" in txt and txt.count("needs a voice") == 2,
+                   "the cast strip shows both, each needing a voice (%r)" % txt[:90])
+                # ---- §3 Make with nobody cast -> casting, not a failed render
+                D["make"]()
+                root.update()
+                ck(D["castp"].winfo_ismapped() and not RIG["calls"],
+                   "Make with an uncast speaker opens casting, renders nothing")
+                ck(D["st"]["step"] == "Voices" and D["chips"]["Voices"].cget("bg") == C["ink"]
+                   and not D["tools"].winfo_ismapped()
+                   and D["b_next"].cget("text").startswith("Next: make"),
+                   "...that is STEP 2 Voices, lit in the header, with Next: make & play")
+                D["next"]()
+                ck(D["st"]["step"] == "Voices" and "still need" in D["status"].cget("text"),
+                   "Next with voices missing stays on Voices and says who")
+                D["st"]["cast_ui"]["ROBIN"]["desc"].set("a bored baker voice")
+                cu = D["st"]["cast_ui"]["GUSTAV"]
+                ck(cu["desc"].get() == "a dry, precise, weary baritone",
+                   "Gustav's audition starts from his CHARACTER bible voice")
+                ck(cu["gender"].get() == "male", "...as a man")
+                # ---- §4 audition three, keep one
+                D["audition"]("GUSTAV", cu["desc"], cu["gender"],
+                              _se.voice_seed("GUSTAV", read_character("gustav")), "gustav")
+                ck(wait(lambda: len(D["st"]["aud"].get("GUSTAV", {}).get("wavs") or []) == 3),
+                   "Audition 3 voices -> three reads")
+                ck(RIG["calls"][-1]["design"] == ["aud:0", "aud:1", "aud:2"]
+                   and RIG["calls"][-1]["engine"] == "qwen", "...designed on qwen in one batch")
+                ck(D["st"]["cast_ui"]["ROBIN"]["desc"].get() == "a bored baker voice",
+                   "a description typed for Robin survives Gustav's auditions redrawing the page")
+                D["keep_aud"]("GUSTAV", D["st"]["aud"]["GUSTAV"]["wavs"][1], "gustav")
+                vs = D["st"]["pj"]["cast"].get("GUSTAV")
+                ck(vs and os.path.exists(os.path.join(_dlg.voices_dir(), vs, "neutral.wav")),
+                   "Keep: the voice is saved with that read as its reference")
+                ck(read_character("gustav").get("voice_slug") == vs,
+                   "...and linked to the CHARACTER (every later scene reuses it)")
+                # Robin: use a saved voice instead
+                mv = _dlg.new_voice("Warm Robin", gender="female", notes="warm, quick")
+                _dlg.save_voice(mv)
+                ff(os.path.join(_dlg.voices_dir(), mv["slug"], "neutral.wav"))
+                D["use_voice"]("ROBIN", "Warm Robin")
+                ck(D["st"]["pj"]["cast"].get("ROBIN") == mv["slug"], "or pick a saved voice")
+                D["open_casting"]("ROBIN")
+                _mu = D["st"]["cast_ui"]["ROBIN"]
+                ck(_mu["desc"].get() == "warm, quick" and _mu["gender"].get() == "female",
+                   "Recast starts from Robin's CURRENT voice (warm, quick, female)")
+                D["next"]()
+                root.update()
+                ck(D["st"]["step"] == "Make" and D["b_make"].winfo_ismapped()
+                   and not D["b_next"].winfo_ismapped() and D["st"].get("add_entry") is None,
+                   "everyone cast: Next -> STEP 3 Make & play (Make/Play/Send, no add row)")
+                import dialogue2_ui as _d2u
+                for _n, _t in (("zzz-old", 1000), ("aaa-new", 2000)):
+                    _p = _dlg.new_project(_n, "A: hi")
+                    _p["slug"] = _n
+                    _dlg.save_project(_p)
+                    os.utime(os.path.join(_dlg.dialogue_dir(), _n, "project.json"), (_t, _t))
+                ck(_d2u.latest_scene(["aaa-new", "zzz-old"]) == "aaa-new",
+                   "it opens the scene changed LAST, not the last name alphabetically")
+                # ---- §5 Make the missing lines
+                del RIG["calls"][:]
+                D["page"].pack(fill="both", expand=True)
+                D["st"]["sel"] = None
+                w.d2["make"]()
+                ck(wait(lambda: not D["st"]["busy"] and all(
+                    l_.get("takes") for l_ in D["st"]["pj"]["lines"]), 25),
+                   "Make: every line gets a take")
+                ck(sorted(RIG["calls"][-1]["clone"]) == sorted(
+                    ["Twelve kronor. For a loaf.", "It's rye, Gustav.", "Outrageous."]),
+                   "...all three read in one batch")
+                ck(D["b_make"].cget("text") == "Every line is made", "the button says so")
+                pj = D["st"]["pj"]
+                ck(all((l_["takes"][0].get("score") or 0) >= 0.85 for l_ in pj["lines"]),
+                   "each take was listened back to and scored")
+                # ---- §6 redo ONE line angrier
+                del RIG["calls"][:]
+                D["redo"](2, "angry")
+                ck(wait(lambda: not D["st"]["busy"] and len(
+                    D["st"]["pj"]["lines"][2]["takes"]) == 2, 20), "Redo angrier: a 2nd take")
+                ck(RIG["calls"][-1]["clone"] == ["Outrageous."]
+                   and D["st"]["pj"]["lines"][2]["mood"] == "angry"
+                   and "GUSTAV" in str(D["st"]["pj"]["cast"]),
+                   "...only that line was read, in the angry mood")
+                ck(any("angry" in d_ for c_ in RIG["calls"] for d_ in c_["design"]),
+                   "...after designing his angry sample (a qwen mood is its own sample)")
+                ck(len(D["st"]["pj"]["lines"][0]["takes"]) == 1, "other lines untouched")
+                D["keep"](2, 0)
+                ck(D["st"]["pj"]["lines"][2]["kept"] == 0, "click take 1 to keep it")
+                # ---- §7 new words: that line is re-read, the rest keep their takes
+                D["save_words"](1, "It's rye, Gustav. Good rye.")
+                pj = D["st"]["pj"]
+                ck(pj["lines"][1]["text"] == "It's rye, Gustav. Good rye."
+                   and not pj["lines"][1]["takes"] and pj["lines"][0]["takes"]
+                   and len(pj["lines"][2]["takes"]) == 2 and pj["lines"][2]["mood"] == "angry",
+                   "new words reset ONLY that line (others keep takes + mood)")
+                # ---- §8 edit as text keeps takes
+                D["toggle_text"]()
+                ts = D["t_script"].get("1.0", "end")
+                D["t_script"].delete("1.0", "end")
+                D["t_script"].insert("1.0", ts + "ROBIN: Two loaves, please.\n")
+                D["toggle_text"]()
+                pj = D["st"]["pj"]
+                ck(len(pj["lines"]) == 4 and pj["lines"][0]["takes"]
+                   and len(pj["lines"][2]["takes"]) == 2,
+                   "Edit as text: a line added, every untouched line keeps its takes")
+                ck(pj["cast"].get("GUSTAV") == vs and pj["cast"].get("ROBIN") == mv["slug"],
+                   "...and the cast survives every edit")
+                ck(D["b_make"].cget("text").startswith("Make the 2 missing lines"),
+                   "Make counts the 2 that need reading (%r)" % D["b_make"].cget("text"))
+                # ---- §9 move + delete
+                D["move"](3, -1)
+                ck(D["st"]["pj"]["lines"][2]["text"] == "Two loaves, please.", "move a line up")
+                D["delete"](2)
+                ck(len(D["st"]["pj"]["lines"]) == 3, "delete a line")
+                # ---- §10 recast: that speaker's lines are re-read, the others are not
+                D["make"]()
+                wait(lambda: not D["st"]["busy"], 20)
+                mv2 = _dlg.new_voice("Brisk Robin", gender="female", notes="brisk")
+                _dlg.save_voice(mv2)
+                D["st"]["aud"]["ROBIN"] = {"voice": mv2, "wavs": []}
+                _w2 = os.path.join(DATA, "aud_b.wav")
+                ff(_w2)
+                D["keep_aud"]("ROBIN", _w2, None)
+                pj = D["st"]["pj"]
+                ck([i for i, l_ in enumerate(pj["lines"]) if l_.get("stale")] == [1],
+                   "a new voice for Robin marks only HER lines to read again")
+                del RIG["calls"][:]
+                D["page"].pack(fill="both", expand=True)
+                D["make"]()
+                ck(wait(lambda: not D["st"]["busy"], 20) and RIG["calls"]
+                   and RIG["calls"][-1]["clone"] == ["It's rye, Gustav. Good rye."]
+                   and not D["st"]["pj"]["lines"][1].get("stale"),
+                   "...and Make reads just that one again")
+                # ---- §11 the scene
+                D["play_scene"]()
+                scene = os.path.join(_se.project_dir(D["st"]["pj"]), "scene.wav")
+                ck(os.path.exists(scene) and "the scene:" in D["status"].cget("text"),
+                   "Play the scene assembles scene.wav (%r)" % D["status"].cget("text"))
+                # ---- §12 a busy card -> the card prompt, not a traceback
+                import cards as _cd
+                _hold = {"who": "ComfyUI", "doing": "making a video", "kind": "comfy",
+                         "running": "R", "port": 8188, "mb": 20000, "pid": 1}
+                RIG["raise"] = _cd.CardBusy("voice", 1, 6000, 500, [_hold])
+                D["redo"](0, None)
+                ck(wait(lambda: getattr(w, "cards_prompt", None) is not None
+                        and w.cards_prompt.winfo_exists(), 10),
+                   "a busy card 2 brings up the card prompt")
+                w.cards_prompt.cards_pick("cancel")
+                RIG["raise"] = RuntimeError("Traceback (most recent call last):\n  File x\n"
+                                            "torch.OutOfMemoryError: CUDA out of memory")
+                D["redo"](0, None)
+                ck(wait(lambda: "ran out of memory" in D["status"].cget("text"), 10)
+                   and "Traceback" not in D["status"].cget("text"),
+                   "a rig failure is one sentence (%r)" % D["status"].cget("text")[:70])
+                RIG["raise"] = None
+                # ---- §13 Write it for me (writer faked)
+                _real_dlg = _dirm.Director.dialogue
+                _dirm.Director.dialogue = lambda self_, brief, cast, seconds=30, model=None: {
+                    "title": "Rye", "lines": [{"speaker": "GUSTAV", "text": "Rye is a lie."},
+                                              {"speaker": "ROBIN", "text": "It's bread."}]}
+                try:
+                    D["new"]()
+                    D["write_run"]("an argument about rye", ["GUSTAV", "ROBIN"])
+                    ck(wait(lambda: not D["st"]["busy"] and D["st"]["pj"] and len(
+                        D["st"]["pj"]["lines"]) == 2, 10), "Write it for me fills the page")
+                    ck(D["st"]["pj"]["cast"].get("GUSTAV") == vs,
+                       "...and Gustav is cast with his character's voice automatically")
+                finally:
+                    _dirm.Director.dialogue = _real_dlg
+                # ---- §14 layout at Mac width
+                w.update()
+                need = sum(c_.winfo_reqwidth() for c_ in D["bar"].winfo_children()) * 1.45
+                ck(need <= D["bar"].winfo_width(), "the Make bar fits at Mac width (%d of %d)"
+                   % (need, D["bar"].winfo_width()))
+                ck(D["page"].winfo_ismapped() and D["bar"].winfo_ismapped(),
+                   "page and Make bar on screen")
+            except Exception as exc:
+                import traceback
+                traceback.print_exc()
+                ck(False, "driver crashed: %r" % exc)
+            finally:
+                _se.tts_batch, _se.transcribe_many = real
+            print("TESTDIALOGUE3 %s" % ("FAILED" if fails else "done"), flush=True)
+            for _f in fails:
+                print("   FAILED: %s" % _f, flush=True)
+            root.after(200, root.destroy)
+        root.after(1500, _td3)
+    # ---- test driver: the DISPATCHER — two jobs at once, then a queue that drains itself ---
+    # FORGE_LAB_TESTDISPATCH=1 FORGE_LAB_NOAUTOSAVE=1 FORGE_LAB_DATA=$(mktemp -d) python3 forge_lab.py
+    # Fake lanes and a fake runner: no rig, no GPU. The unit rules live in tools/dispatch_matrix.py;
+    # this proves the WINDOW wires the queue (a click becomes an entry and its result comes back).
+    if os.environ.get("FORGE_LAB_TESTDISPATCH") == "1":
+        def _tdisp():
+            import dispatch as _dsp
+            import home_queue as _hq
+            import jobqueue as _jq
+            fails = []
+
+            def ck(cond, label):
+                print("  %-4s %s" % ("ok" if cond else "FAIL", label), flush=True)
+                if not cond:
+                    fails.append(label)
+
+            def wait(cond, secs=25):
+                t0 = time.time()
+                while time.time() - t0 < secs:
+                    root.update()
+                    if cond():
+                        return True
+                    time.sleep(0.05)
+                return False
+
+            q = _jq.app_queue()
+            gates = {}
+            ran = []
+
+            def fake_runner(payload, report, lane_port=None):
+                tag = payload.get("tag") or "?"
+                ran.append((tag, lane_port))
+                report("rendering %s" % tag)
+                gates.setdefault(tag, threading.Event()).wait(20)
+                return {"file": os.path.join(DATA, "%s.png" % tag), "kind": "image", "pid": tag,
+                        "prompt": tag}
+
+            def fake_room(card, need, snap=None):
+                return {"ok": True, "why": "ok", "usable": 99999.0, "need": int(need or 0),
+                        "blockers": [], "freed": [], "note": ""}
+
+            def fake_probe(port):
+                return 0
+
+            def boom(payload, report, lane_port=None):
+                raise RuntimeError("the rig said no")
+
+            _dsp.RUNNERS["testjob"] = fake_runner
+            _dsp.RUNNERS["boomjob"] = boom
+            _dsp.ROOM["fn"] = fake_room
+            try:
+                # CARD MODE is what offers card 2's lane at all — the same switch the CARD
+                # MODE row in the Make tab sets. (This driver's DATA is a temp dir.)
+                import cards as _cd
+                _cd.set_route("both")
+                ck([c for c, _p in _dsp.lane_ports()] == [0, 1],
+                   "with CARD MODE on BOTH there are two lanes to fill")
+                ck(_dsp.queue() is q and _hq.app_queue() is q,
+                   "ONE queue for the process — the panel, the Home tab and the dispatcher")
+                d = _dsp.Dispatcher(q=q, tick_s=0.2, probe=fake_probe, room=fake_room)
+                d.start()
+                ck(d.running(), "the scheduler thread is up")
+
+                def que(tag, **kw):
+                    return _dsp.enqueue("testjob %s" % tag, {"tag": tag}, need="video",
+                                        one_of=(0, 1), est_s=30, kind="testjob", **kw)
+                one, two = que("one"), que("two")
+                ck(wait(lambda: ["one", "two"] == [t for t, _p in ran]),
+                   "TWO one-card jobs start at once, one per card")
+                ck(ran[:2] == [("one", 8188), ("two", 8189)],
+                   "...the first on card 1's lane, the second on card 2's %r" % (ran[:2],))
+                ck(q.get(one["id"])["lane"] == "comfy_a" and q.get(two["id"])["lane"] == "comfy_b",
+                   "...and each row says which lane it is on")
+                ck(q.get(one["id"])["cards"] == [0] and q.get(two["id"])["cards"] == [1],
+                   "'any card' is claimed to the card it really took")
+                third = que("three")
+                wait(lambda: False, 0.9)
+                ck(q.get(third["id"])["state"] == "queued"
+                   and "any card" in _jq.label(q.get(third["id"])),
+                   "a third job WAITS while both cards are busy (queued, not refused)")
+                turbo = _dsp.enqueue("Turbo — both cards", {"tag": "turbo"}, need="turbo",
+                                     one_of=None, cards=[0, 1], est_s=900, kind="testjob")
+                gates["one"].set()
+                ck(wait(lambda: "three" in [t for t, _p in ran]),
+                   "when a render finishes, the waiting job starts BY ITSELF")
+                ck(q.get(third["id"])["cards"] == [0], "...on the card that freed")
+                wait(lambda: False, 1.0)
+                ck(q.get(turbo["id"])["state"] == "queued",
+                   "a job needing BOTH cards still waits (Turbo is exclusive by construction)")
+                gates.setdefault("two", threading.Event()).set()
+                gates.setdefault("three", threading.Event()).set()
+                ck(wait(lambda: q.get(turbo["id"])["state"] == "running" and ran[-1][0] == "turbo"),
+                   "...and starts once both are free")
+                ck(q.get(turbo["id"])["lane"] == "comfy_a",
+                   "...on the MAIN lane, the one that sees both cards")
+                ck(q.get(one["id"])["state"] == "done" and _dsp.result(one["id"])["file"].endswith(
+                    "one.png"), "a finished job is DONE and keeps its result for the window")
+                gates.setdefault("turbo", threading.Event()).set()
+                ck(wait(lambda: q.get(turbo["id"])["state"] == "done" and not q.running()),
+                   "every job drained")
+                be = _dsp.enqueue("testjob boom", {"tag": "boom"}, kind="boomjob")
+                ck(wait(lambda: q.get(be["id"])["state"] == "failed")
+                   and "the rig said no" in (q.get(be["id"])["error"] or ""),
+                   "a job that raises FAILS, and keeps the sentence for the panel")
+                d.stop()
+                ck(not d.running(), "the scheduler stops cleanly")
+
+                # --- the WINDOW: a click is a queue entry, and its result comes back to it
+                _dsp.RUNNERS["apps"] = fake_runner                      # no rig in this driver
+                pic = os.path.join(DATA, "disp_pic.png")
+                subprocess.run(["ffmpeg", "-v", "error", "-y", "-f", "lavfi", "-i",
+                                "color=c=0x445566:s=96x96", "-frames:v", "1", pic],
+                               capture_output=True)
+                _nav_go("Apps")
+                root.update()
+                w = st.get("_apps_win", {}).get("win")
+                A = getattr(w, "ap", None)
+                ck(A is not None, "the Apps window opened")
+                A["pick"]("outfit")
+                A["set"]("image", pic)
+                A["text_var"].set("a yellow raincoat")
+                A["go"]()
+                e_app = q.entries()[-1]
+                ck(e_app["kind"] == "apps" and (e_app["payload"] or {}).get("key") == "outfit"
+                   and e_app["state"] in ("queued", "running", "done"),
+                   "a click in the Apps window BECOMES a queue entry (kind=apps)")
+                ck(wait(lambda: A["st"]["result"] and not A["st"]["busy"]),
+                   "the result comes back to the panel through the queue")
+                ck((A["st"]["result"] or {}).get("file", "").endswith("outfit.png")
+                   or (A["st"]["result"] or {}).get("kind") == "image",
+                   "...and it is the job's own output")
+            except Exception as exc:
+                import traceback
+                traceback.print_exc()
+                ck(False, "driver crashed: %r" % exc)
+            finally:
+                for _g in gates.values():
+                    _g.set()
+                _dsp.ROOM["fn"] = None
+            print("TESTDISPATCH %s" % ("FAILED" if fails else "done"), flush=True)
+            for _f in fails:
+                print("   FAILED: %s" % _f, flush=True)
+            root.after(200, root.destroy)
+        root.after(1500, _tdisp)
+    # ---- test driver: the MAKE TAB's RUN is a QUEUE ENTRY (2026-10-22) ---------------------
+    # Two RUN presses at once, one per card, then a third that WAITS and starts by itself when a
+    # card frees. Fake lanes + a fake submit: no rig, no GPU, nothing rendered.
+    # FORGE_LAB_TESTMAKERUN=1 FORGE_LAB_NOAUTOSAVE=1 FORGE_LAB_DATA=$(mktemp -d) python3 forge_lab.py
+    if os.environ.get("FORGE_LAB_TESTMAKERUN") == "1":
+        def _tmr():
+            import dispatch as _dsp
+            import jobqueue as _jq
+            import sys as _sys
+            fails = []
+
+            def ck(cond, label):
+                print("  %-4s %s" % ("ok" if cond else "FAIL", label), flush=True)
+                if not cond:
+                    fails.append(label)
+
+            def wait(cond, secs=25):
+                t0 = time.time()
+                while time.time() - t0 < secs:
+                    root.update()
+                    if cond():
+                        return True
+                    time.sleep(0.05)
+                return False
+
+            me = _sys.modules["__main__"]
+            sent = []
+            lanes = {"free": {8188, 8189}}
+
+            def f_probe(port):
+                return 0 if port in lanes["free"] else 1
+
+            def f_room(card, need, snap=None):
+                return {"ok": True, "why": "ok", "usable": 99999.0, "need": int(need or 0),
+                        "blockers": [], "freed": [], "note": ""}
+
+            def f_submit(mode, p, refs=None):
+                sent.append((mode, dict(p), list(refs or [])))
+                return "mk%03d" % len(sent), 7
+
+            def f_state(pid):
+                return {"state": "done", "detail": "", "progress": {}}
+
+            def f_collect(pid):
+                return {"id": pid, "images": [{"file": "take.png"}], "wall": 2.0}
+
+            real = (me.submit, me.run_state, me.collect)
+            me.submit, me.run_state, me.collect = f_submit, f_state, f_collect
+            try:
+                q = _jq.app_queue()
+                import cards as _cd
+                _cd.set_route("both")        # card 2's lane only exists in BOTH mode
+                _dsp.PROBE["fn"] = f_probe
+                _dsp.ROOM["fn"] = f_room
+                ck(_dsp.start(), "the dispatcher is up against fake lanes")
+                pic = os.path.join(DATA, "mk_probe.png")
+                subprocess.run(["ffmpeg", "-v", "error", "-y", "-f", "lavfi", "-i",
+                                "color=c=0x334455:s=64x64", "-frames:v", "1", pic],
+                               capture_output=True)
+                st["mode"] = "video"
+                st["video_mode"] = "i2v"
+                st["refs"] = [pic]
+                prompt.delete("1.0", "end")
+                prompt.insert("1.0", "a barn at dawn, mist")
+                # ---- one lane busy: the press takes the OTHER card
+                lanes["free"] = {8189}
+                run_btn.invoke()
+                ck(wait(lambda: len(sent) == 1), "a RUN press reaches submit")
+                ck(sent[0][1].get("port") == 8189,
+                   "...pinned to the lane the queue checked (%r)" % (sent[0][1].get("port"),))
+                ck(sent[0][0] == "video" and sent[0][2] == [pic],
+                   "...the same mode and reference as before the queue")
+                e1 = q.entries()[-1]
+                ck(e1["kind"] == "gate" and e1["state"] in ("running", "done"),
+                   "...and it is a queue entry (%s/%s)" % (e1["kind"], e1["state"]))
+                ck("barn" in e1["title"], "the row is named after the prompt (%r)" % e1["title"])
+                ck(wait(lambda: q.get(e1["id"])["state"] == "done"), "the entry finishes when the "
+                                                                    "take does")
+                # ---- both lanes busy: the next press WAITS
+                lanes["free"] = set()
+                run_btn.invoke()
+                ck(wait(lambda: "waiting for a card" in runst.cget("text")),
+                   "with both cards busy the RUN WAITS (and says so): %r" % runst.cget("text"))
+                e2 = q.entries()[-1]
+                ck(e2["state"] == "queued" and e2["lane"] is None,
+                   "...as a QUEUED entry (%s)" % e2["state"])
+                ck(len(sent) == 1, "nothing was submitted while it waits")
+                ck(str(run_btn.cget("state")) == "normal",
+                   "RUN stays live while one waits — you can queue another")
+                # ---- a card frees: it starts BY ITSELF
+                lanes["free"] = {8188}
+                ck(wait(lambda: len(sent) == 2), "when a card frees the waiting RUN starts by "
+                                                 "itself")
+                ck(sent[1][1].get("port") == 8188, "...pinned to that lane (%r)"
+                   % (sent[1][1].get("port"),))
+                ck(wait(lambda: q.get(e2["id"])["state"] == "done"),
+                   "...and its entry finishes when the take does")
+                ck("finished" in runst.cget("text"),
+                   "the status line reports the take: %r" % runst.cget("text"))
+                ck(wait(lambda: not q.running()), "no entry is left holding a card")
+                # ---- deleting a WAITING run stops it (the Home panel's Delete)
+                lanes["free"] = set()
+                _before = {e["id"] for e in q.entries()}
+                run_btn.invoke()
+                ck(wait(lambda: any(e["id"] not in _before for e in q.entries())),
+                   "a third press queues")
+                e3 = next(e for e in q.entries() if e["id"] not in _before)
+                ck(e3["state"] == "queued", "...as a waiting entry (%s)" % e3["state"])
+                q.remove(e3["id"])
+                ck(wait(lambda: "off the queue" in runst.cget("text")),
+                   "deleting the row stops that run: %r" % runst.cget("text"))
+                ck(len(sent) == 2, "...and it never reached the rig")
+            except Exception as exc:
+                import traceback
+                traceback.print_exc()
+                ck(False, "driver crashed: %r" % exc)
+            finally:
+                me.submit, me.run_state, me.collect = real
+                _dsp.PROBE["fn"] = None
+                _dsp.ROOM["fn"] = None
+            print("TESTMAKERUN %s" % ("FAILED" if fails else "done"), flush=True)
+            for _f in fails:
+                print("   FAILED: %s" % _f, flush=True)
+            root.after(200, root.destroy)
+        root.after(1500, _tmr)
+    # ---- test driver: THE REAL THING — real dispatcher, real rig, REAL renders --------------
+    # Two "Make it move" jobs running at once, one per card, then a third that queues and
+    # starts by itself when a card frees. Needs CARD MODE = BOTH and takes minutes.
+    # FORGE_LAB_TESTREAL=1 FORGE_LAB_NOAUTOSAVE=1 FORGE_LAB_DATA=$(mktemp -d) \
+    #     "dist/Forge Lab.app/Contents/MacOS/Forge Lab"
+    if os.environ.get("FORGE_LAB_TESTREAL") == "1":
+        def _treal():
+            import apps as _apps
+            import cards as _cd
+            import dispatch as _dsp
+            fails = []
+
+            def ck(cond, label):
+                print("  %-4s %s" % ("ok" if cond else "FAIL", label), flush=True)
+                if not cond:
+                    fails.append(label)
+
+            def wait(cond, secs=1800):
+                t0 = time.time()
+                while time.time() - t0 < secs:
+                    root.update()
+                    if cond():
+                        return True
+                    time.sleep(0.5)
+                return False
+
+            def ago(t):
+                return "%.0f s" % (time.time() - t0all) if t is None else "%.0f s" % (t - t0all)
+
+            t0all = time.time()
+            snap = lambda: {e["id"]: e for e in _dsp.queue().entries()}
+            try:
+                _cd.set_route("both")
+                pic = next((p for p in (
+                    os.path.expanduser("~/forge-lab/characters/armand/still_casio_bodega_v2.png"),
+                    os.path.expanduser("~/forge-lab/characters/due/still.png")) if os.path.exists(p)),
+                    None)
+                ck(pic is not None, "a real picture to move (%s)" % pic)
+                ck(_dsp.start(), "the dispatcher started against the REAL rig")
+                ck(wait(lambda: sum(1 for l_ in _dsp.lanes() if l_["up"]) >= 2, 30),
+                   "both lanes answer: %r" % ([l_["name"] for l_ in _dsp.lanes() if l_["up"]],))
+                jobs = []
+                for mv in ("Slow push-in", "Orbit", "Crane up"):
+                    a_ = {"image": pic, "move": mv, "prompt": "", "seconds": 5}
+                    jobs.append(_dsp.enqueue("Make it move — %s" % mv,
+                                             {"key": "move", "args": a_, "quality": "Draft"},
+                                             need="video", est_s=_apps.estimate("move", a_)))
+                a, b, c = jobs
+                print("  ... queued at %.0f s" % (time.time() - t0all), flush=True)
+                ck(wait(lambda: len(_dsp.queue().running()) == 2, 600),
+                   "TWO renders are going at once")
+                lanes = sorted(e["lane"] for e in _dsp.queue().running())
+                ck(len(set(lanes)) == 2, "one on each card %r" % (lanes,))
+                ck(_dsp.queue().get(c["id"])["state"] == "queued",
+                   "the third job WAITS while both cards are busy")
+                st = snap()
+                print("  ... two running at %.0f s (started %s / %s)"
+                      % (time.time() - t0all, ago(st[a["id"]]["started"]),
+                         ago(st[b["id"]]["started"])), flush=True)
+                ck(wait(lambda: snap()[c["id"]]["state"] != "queued", 1200),
+                   "the third starts BY ITSELF when a card frees")
+                ck(snap()[c["id"]]["lane"] in ("comfy_a", "comfy_b"),
+                   "...on %r" % (snap()[c["id"]]["lane"],))
+                ck(wait(lambda: all(snap()[j["id"]]["state"] in ("done", "failed") for j in jobs),
+                        2400), "all three have finished")
+                st = snap()
+                for j, mv in zip(jobs, ("Slow push-in", "Orbit", "Crane up")):
+                    e = st[j["id"]]
+                    print("  %-8s %-14s lane=%-8s %s -> %s"
+                          % (mv, e["state"], e["lane"], ago(e["started"]), ago(e["ended"])),
+                          flush=True)
+                ck(all(st[j["id"]]["state"] == "done" for j in jobs), "every one of them is DONE")
+                o1, o2, o3 = (st[j["id"]] for j in jobs)
+                ck(o1["lane"] != o2["lane"], "the first two ran on DIFFERENT cards")
+                ck(abs((o2["started"] or 0) - (o1["started"] or 0)) < 20,
+                   "and started within 20 s of each other (%.0f s apart)"
+                   % abs((o2["started"] or 0) - (o1["started"] or 0)))
+                first_end = min(o1["ended"] or 1e12, o2["ended"] or 1e12)
+                ck(o1["started"] < first_end and o2["started"] < first_end,
+                   "the two really OVERLAPPED (each began before the other ended)")
+                ck((o3["started"] or 0) >= first_end - 10,
+                   "the third did NOT start until a card was free (%.0f s after)"
+                   % ((o3["started"] or 0) - first_end))
+                for j in jobs:
+                    out = _dsp.result(j["id"]) or {}
+                    ck(os.path.exists(out.get("file") or ""),
+                       "a real video came back: %s" % os.path.basename(out.get("file") or "-"))
+                # ---- and the MAKE TAB's own RUN press, on the real rig: a GATE, with the
+                # lane pinned, collected by the app's own watcher (track()).
+                st["mode"] = "video"
+                st["video_mode"] = "i2v"
+                st["refs"] = [pic]
+                prompt.delete("1.0", "end")
+                prompt.insert("1.0", "a barn at dawn, mist, the camera slowly pushes in")
+                _n0 = len(_dsp.queue().entries())
+                _t_make = time.time()
+                run_btn.invoke()
+                ck(wait(lambda: len(_dsp.queue().entries()) > _n0, 20),
+                   "RUN in the Make tab is a QUEUE ENTRY too")
+                gate_e = _dsp.queue().entries()[-1]
+                ck(gate_e["kind"] == "gate", "...a gate one (%s)" % gate_e["kind"])
+                ck(wait(lambda: _dsp.queue().get(gate_e["id"])["state"] in ("running", "done"),
+                        600), "...and a card is given to it")
+                ck(wait(lambda: _dsp.queue().get(gate_e["id"])["state"] == "done", 900),
+                   "the real render finished and the entry is DONE")
+                _gl = _dsp.queue().get(gate_e["id"])["lane"]
+                ck(str(_gl) in ("comfy_a", "comfy_b"), "...on %r" % (_gl,))
+                _want = 8188 if _gl == "comfy_a" else 8189
+                _new = [i for i in read_index() if (i.get("started") or 0) >= _t_make - 5]
+                ck(_new and all(int(i.get("port") or 0) == _want for i in _new),
+                   "the take in the index records the lane it was PINNED to (%r, want %d)"
+                   % ([(i.get("mode"), i.get("port")) for i in _new], _want))
+                ck("finished" in runst.cget("text") or "saved" in runst.cget("text"),
+                   "the window's own status line reports the take: %r" % runst.cget("text"))
+            except Exception as exc:
+                import traceback
+                traceback.print_exc()
+                ck(False, "driver crashed: %r" % exc)
+            print("TESTREAL %s (%s) — %d failed"
+                  % ("FAILED" if fails else "done", ago(None), len(fails)), flush=True)
+            for _f in fails:
+                print("   FAILED: %s" % _f, flush=True)
+            root.after(500, root.destroy)
+        root.after(1500, _treal)
+    # ---- test driver: the HOME PAGE QUEUE — panel presence + live rows ----
+    # FORGE_LAB_TESTQUEUE=1 FORGE_LAB_NOAUTOSAVE=1 FORGE_LAB_DATA=$(mktemp -d) python3 forge_lab.py
+    if os.environ.get("FORGE_LAB_TESTQUEUE") == "1":
+        def _tqueue():
+            import home_queue as _hq
+            import jobqueue as _jq
+            fails = []
+
+            def ck(cond, label):
+                print("  %-4s %s" % ("ok" if cond else "FAIL", label), flush=True)
+                if not cond:
+                    fails.append(label)
+
+            def wait(cond, secs=15):
+                t0 = time.time()
+                while time.time() - t0 < secs:
+                    root.update()
+                    if cond():
+                        return True
+                    time.sleep(0.05)
+                return False
+
+            def find_panel(w):
+                for ch in w.winfo_children():
+                    if hasattr(ch, "_queue_listbox"):
+                        return ch
+                    got = find_panel(ch)
+                    if got is not None:
+                        return got
+                return None
+
+            def find_by(w, attr):
+                for ch in w.winfo_children():
+                    if hasattr(ch, attr):
+                        return ch
+                    got = find_by(ch, attr)
+                    if got is not None:
+                        return got
+                return None
+
+            def on_screen(w):
+                """⚠️ BUILT IS NOT SHOWN. A panel that was created but never packed sits in the
+                tree with mapped=0 and 1x1, and every 'does it have rows' assertion still passes
+                — which is exactly how the Home tab shipped with an invisible queue."""
+                try:
+                    return bool(w.winfo_ismapped() and w.winfo_height() > 60
+                                and w.winfo_width() > 60)
+                except Exception:
+                    return False
+
+            try:
+                _d = _dockref["d"]
+                tab = next((t for t in (getattr(_d, "tabs", None) or [])
+                            if t.title() == "Home"), None)
+                ck(tab is not None, "a tab titled Home EXISTS")
+                ck(_d.cur is tab, "the app opens ON the Home tab")
+                ck(tab is not None and tab is not home, "it is a different tab from Make")
+                box = find_panel(tab) if tab is not None else None
+                ck(box is not None, "the Home tab carries a QUEUE panel")
+                ck(box is not None and on_screen(box),
+                   "the QUEUE panel is ON SCREEN (mapped + sized, not just built)")
+                cbox = find_by(tab, "cards_state") if tab is not None else None
+                ck(cbox is not None, "the Home tab carries the machine room")
+                ck(cbox is not None and on_screen(cbox),
+                   "the machine room is ON SCREEN too")
+                ck("Home" in nav_rows, "the left bar has a Home row")
+                if "Home" in nav_rows:
+                    # click the ROW LABEL the way a person would, not the handler directly
+                    _d.select(None)                       # leave Home first
+                    root.update()
+                    nav_rows["Home"][0].winfo_children()[1].event_generate("<Button-1>")
+                    root.update()
+                    ck(_d.cur is tab, "clicking Home in the left bar brings the Home tab back")
+                _takes = getattr(tab, "_home_takes", None)
+                _tcan = getattr(tab, "_home_canvas", None)
+                ck(_takes is not None, "the Home tab carries a recent-takes area")
+                # the canvas is the widget that is PACKED (the rows live inside it), so that is
+                # what "on screen" means here — plus the per-row check further down.
+                ck(_tcan is not None and on_screen(_tcan),
+                   "the takes area is ON SCREEN (canvas mapped + sized: %sx%s)"
+                   % ((_tcan.winfo_width(), _tcan.winfo_height()) if _tcan else ("?", "?")))
+                ck(bool(getattr(tab, "_home_rows", None)) or (_takes and _takes.winfo_children()),
+                   "the takes area shows rows or its empty hint")
+                # ---- RECENT TAKES MIRRORS THE IMAGE TAB: rows, ITS filters, and the 100 cap ---
+                # ⚠️ The takes list is the INDEX now, like the image tab's — a file sitting in
+                # runs/ with no index entry is invisible to both tabs, so the seeds below are
+                # index entries WITH their files, not bare files.
+                _rd = os.path.join(DATA, "runs")
+                for _i in range(1, 7):
+                    _rid, _fn = "drvstill%02d" % _i, "forge_lab_900%02d_.png" % _i
+                    os.makedirs(os.path.join(_rd, _rid), exist_ok=True)
+                    subprocess.run(["ffmpeg", "-v", "error", "-y", "-f", "lavfi", "-i",
+                                    "color=c=orange:s=420x260", "-frames:v", "1",
+                                    os.path.join(_rd, _rid, _fn)], capture_output=True)
+                    _index_insert({"id": _rid, "mode": "t2i", "label": "Text to image",
+                                   "prompt": "seeded still %d" % _i, "seed": 9000 + _i,
+                                   "steps": 25, "started": time.time() - _i,
+                                   "status": "success", "images": [{"file": _fn}]})
+                os.makedirs(os.path.join(_rd, "drvclip1"), exist_ok=True)
+                subprocess.run(["ffmpeg", "-v", "error", "-y", "-f", "lavfi", "-i",
+                                "color=c=teal:s=260x420:d=1", "-frames:v", "1",
+                                os.path.join(_rd, "drvclip1", "forge_lab_90099_.mp4")],
+                               capture_output=True)
+                _index_insert({"id": "drvclip1", "mode": "video", "label": "Video",
+                               "prompt": "seeded clip", "seed": 4242, "steps": 12,
+                               "video": True, "seconds": 5.0, "started": time.time(),
+                               "status": "success",
+                               "images": [{"file": "forge_lab_90099_.mp4"}]})
+                os.makedirs(os.path.join(_rd, "drvsong1"), exist_ok=True)
+                subprocess.run(["ffmpeg", "-v", "error", "-y", "-f", "lavfi", "-i",
+                                "sine=frequency=330:duration=1",
+                                os.path.join(_rd, "drvsong1", "yue2_90001.flac")],
+                               capture_output=True)
+                _index_insert({"id": "drvsong1", "mode": "song", "label": "Song",
+                               "prompt": "seeded song", "seed": 7, "started": time.time(),
+                               "status": "success", "images": [{"file": "yue2_90001.flac"}]})
+                _fill = getattr(tab, "_home_fill", None)
+                ck(_fill is not None, "the takes area exposes its repaint to a test")
+                if _fill:
+                    _fill()
+                    root.update()
+                _hrows = getattr(tab, "_home_rows", None) or []
+                ck(len(_hrows) == 8, "all 8 seeded takes are listed (%d)" % len(_hrows))
+                _th = getattr(tab, "_home_thumbs", None) or []
+                ck(len(_th) >= 1, "a real THUMBNAIL image is loaded, not just text (%d image refs)"
+                   % len(_th))
+                # and it is a decoded image of a real size, not a 1x1 stub
+                ck(bool(_th) and _th[0].width() > 50 and _th[0].height() > 50,
+                   "...decoded at %dx%d px"
+                   % ((_th[0].width(), _th[0].height()) if _th else (0, 0)))
+                _labs = [l for r in (_takes.winfo_children() if _takes else [])
+                         for l in r.winfo_children() if l.winfo_class() == "Label"]
+                ck(_labs and all(l.winfo_ismapped() for l in _labs),
+                   "every take row is ON SCREEN, thumbnail and text (%d labels)" % len(_labs))
+                _txt = " ".join(str(l.cget("text")) for l in _labs)
+                ck("forge_lab_90001_.png" in _txt and "forge_lab_90099_.mp4" in _txt,
+                   "each row names the file it is: %r" % _txt[:90])
+                # ---- the SAME kind filters as the image tab, over the SAME state -------------
+                _kb = getattr(tab, "_home_kind_btns", None) or {}
+                ck(list(_kb) == ["All", "Images", "Videos", "Songs"],
+                   "the same four kind filters as the image tab (%r)" % (list(_kb),))
+                # ⚠️ on_screen() is the PANEL test (>60 px): a filter chip is ~45x22, so this
+                # asks the honest question instead — mapped, and drawn with a real size.
+                ck(_kb and all(b.winfo_ismapped() and b.winfo_width() > 10
+                               and b.winfo_height() > 5 for b in _kb.values()),
+                   "...and all of them are ON SCREEN (%s)"
+                   % [(str(b.cget("text")), b.winfo_width(), b.winfo_height())
+                      for b in _kb.values()])
+                if _kb:
+                    _kb["Images"].event_generate("<Button-1>")
+                    root.update()
+                    ck(len(tab._home_rows) == 6 and all(r["kind"] == "image"
+                                                        for r in tab._home_rows),
+                       "Images shows only the stills (%d)" % len(tab._home_rows))
+                    _kb["Videos"].event_generate("<Button-1>")
+                    root.update()
+                    ck(len(tab._home_rows) == 1 and tab._home_rows[0]["kind"] == "video",
+                       "Videos shows only the clip (%d)" % len(tab._home_rows))
+                    _kb["Songs"].event_generate("<Button-1>")
+                    root.update()
+                    ck(len(tab._home_rows) == 1 and tab._home_rows[0]["kind"] == "song",
+                       "Songs shows only the song (%d)" % len(tab._home_rows))
+                    ck(st.get("take_kind") == "Songs",
+                       "...and it is the IMAGE tab's own state: both tabs share one filter")
+                    # and the image tab reflects it at once — its own chip lights up
+                    ck(str(kind_btns["Songs"].cget("bg")) == C["ink"]
+                       and str(kind_btns["All"].cget("bg")) != C["ink"],
+                       "the IMAGE tab's own chip follows the click here (Songs lit, All dark)")
+                    _kb["All"].event_generate("<Button-1>")
+                    root.update()
+                    ck(len(tab._home_rows) == 8, "All brings every take back (%d)"
+                       % len(tab._home_rows))
+                if takes_filter_var is not None:
+                    takes_filter_var.set("★ only")
+                    _fill()
+                    root.update()
+                    ck(len(tab._home_rows) == 0,
+                       "★ only shows nothing while no take is rated ★ (%d)" % len(tab._home_rows))
+                    set_rating("drvstill01", 1)
+                    _fill()
+                    root.update()
+                    ck(len(tab._home_rows) == 1,
+                       "★ only shows the take that was kept (%d)" % len(tab._home_rows))
+                    st["take_unkept"] = True
+                    _fill()
+                    root.update()
+                    ck(len(tab._home_rows) == 0,
+                       "unkept only hides it again — the image tab's other filter, same state")
+                    st["take_unkept"] = False
+                    takes_filter_var.set("All")
+                    _fill()
+                    root.update()
+                    ck(len(tab._home_rows) == 8, "back to All (%d)" % len(tab._home_rows))
+                # the clip's poster is made OFF the Tk thread: wait for the repaint that finds it
+                _ok = False
+                for _ in range(40 if _fill else 0):
+                    root.update()
+                    time.sleep(0.5)
+                    _fill()
+                    root.update()
+                    _t2 = " ".join(str(l.cget("text")) for r in (_takes.winfo_children()
+                                                                 if _takes else [])
+                                   for l in r.winfo_children() if l.winfo_class() == "Label")
+                    if "▶" in _t2:
+                        _ok = True
+                        break
+                ck(_ok, "the clip gets its poster frame and shows ▶ over it (off-thread, cached)")
+                # ---- the wheel scrolls the takes list (over a ROW too, not just the canvas)
+                _row0 = (_takes.winfo_children() or [None])[0] if _takes else None
+                if _tcan is not None and _row0 is not None:
+                    _before = _tcan.yview()[0]
+                    _row0.event_generate("<MouseWheel>", delta=-120, x=20, y=20)
+                    root.update()
+                    _after = _tcan.yview()[0]
+                    ck(_after > _before,
+                       "the wheel scrolls the list from over a take row (%.3f -> %.3f)"
+                       % (_before, _after))
+                    # a TRACKPAD sends <TouchpadScroll> with the delta packed in the low 16 bits
+                    try:
+                        _b2 = _tcan.yview()[0]
+                        _row0.event_generate("<TouchpadScroll>", delta=(-120 & 0xFFFF), x=20, y=20)
+                        root.update()
+                        ck(_tcan.yview()[0] >= _b2,
+                           "...and the trackpad's own event scrolls too")
+                    except tk.TclError:
+                        pass          # this Tk has no <TouchpadScroll>; the wheel check stands
+                # ---- the SAME 100 cap as the image tab --------------------------------------
+                # The image tab shows filter_kind(index)[:TAKES_SHOWN]. Held to that, seeding
+                # 105 more takes must leave 100 rows and say so — not 113.
+                for _i in range(105):
+                    _index_insert({"id": "drvbare%03d" % _i, "mode": "t2i",
+                                   "label": "Text to image", "prompt": "bare %d" % _i,
+                                   "seed": _i, "started": time.time(), "status": "success",
+                                   "images": [{"file": "not_here_%d.png" % _i}]})
+                if _fill:
+                    _fill()
+                    root.update()
+                ck(len(tab._home_rows) == TAKES_SHOWN,
+                   "the list caps at the image tab's %d, not 113 (%d)"
+                   % (TAKES_SHOWN, len(tab._home_rows)))
+                ck("of %d" % TAKES_SHOWN in str(tab._home_hdr.cget("text")),
+                   "and the header says how many of how many: %r"
+                   % str(tab._home_hdr.cget("text"))[:52])
+                _shd = os.environ.get("FORGE_LAB_SHOTDIR")
+                if _shd and _tcan is not None:
+                    try:
+                        for _ in range(8):
+                            root.update()
+                            time.sleep(0.15)
+                        subprocess.run(["import", "-window", "root", "-crop", "1400x900+0+0",
+                                        os.path.join(_shd, "home_takes.png")],
+                                       capture_output=True)
+                    except Exception:              # noqa: BLE001
+                        pass
+                if box is not None:
+                    lst = box._queue_listbox
+                    ck(lst.size() == 1 and "nothing queued" in lst.get(0),
+                       "it starts with the empty-queue hint")
+                    q = _hq.app_queue()
+                    e = q.add(_jq.new_entry("driver row", "comfy", 1, est_s=60))
+                    ck(wait(lambda: len(box._queue_ids) == 1),
+                       "a job added to the queue appears (the hint row gives way to it)")
+                    ck(wait(lambda: "card 2" in lst.get(0)), "the row names the card it needs")
+                    lst.selection_clear(0, "end")
+                    lst.selection_set(0)
+                    box._queue_buttons["pause"].invoke()
+                    ck(q.get(e["id"])["state"] == "paused", "Pause in the real window pauses it")
+                    ck(wait(lambda: "paused" in lst.get(0)), "and the row redraws as paused")
+                    lst.selection_clear(0, "end")
+                    lst.selection_set(0)
+                    box._queue_buttons["delete"].invoke()
+                    ck(wait(lambda: not box._queue_ids and "nothing queued" in lst.get(0)),
+                       "Delete clears it and the hint comes back")
+                    # ---- and a job that FINISHES leaves by itself (Ryan, 2026-10-22) ----------
+                    # "once the generation is completed it should fall off the list of the queue"
+                    e2 = q.add(_jq.new_entry("driver finishes", "comfy", 1, est_s=30))
+                    ck(wait(lambda: box._queue_ids == [e2["id"]]),
+                       "a row sits in the queue while it waits")
+                    # ⚠️ finish() only accepts a RUNNING entry (a queued one returns False) —
+                    # a no-op here reads exactly like "the row did not fall off".
+                    q.mark_running(e2["id"], "comfy_a")
+                    ck(wait(lambda: "running" in lst.get(0)), "...then shows as running on a card")
+                    q.finish(e2["id"], ok=True)
+                    ck(wait(lambda: not box._queue_ids and "nothing queued" in lst.get(0)),
+                       "...and when it finishes the row falls off BY ITSELF (no Delete needed)")
+                    ck(q.get(e2["id"]) is not None,
+                       "...while the entry stays in the queue file for its own window to read")
+            except Exception as exc:
+                import traceback
+                traceback.print_exc()
+                ck(False, "driver crashed: %r" % exc)
+            print("TESTQUEUE %s" % ("FAILED" if fails else "done"), flush=True)
+            for _f in fails:
+                print("   FAILED: %s" % _f, flush=True)
+            root.after(200, root.destroy)
+        root.after(1500, _tqueue)
+    # ---- test driver: the CARD MANAGER — panel + card-busy prompt (rig faked) ----
+    # FORGE_LAB_TESTCARDMGR=1 FORGE_LAB_NOAUTOSAVE=1 FORGE_LAB_DATA=$(mktemp -d) python3 forge_lab.py
+    if os.environ.get("FORGE_LAB_TESTCARDMGR") == "1":
+        def _tcards():
+            import cards as _cd
+            import audio.client as _ac
+            fails = []
+
+            def ck(cond, label):
+                print("  %-4s %s" % ("ok" if cond else "FAIL", label), flush=True)
+                if not cond:
+                    fails.append(label)
+
+            def wait(cond, secs=20):
+                t0 = time.time()
+                while time.time() - t0 < secs:
+                    root.update()
+                    if cond():
+                        return True
+                    time.sleep(0.05)
+                return False
+
+            # ---- a FAKE forge at cards' two seams: cards, processes, ComfyUI queues
+            R = {"procs": {}, "util": {0: 0, 1: 0}, "q": {8188: [[], []], 8189: [[], []]},
+                 "calls": []}
+            TG = {"1": {"class_type": "RayInitializer", "inputs": {}}}
+
+            def f_ssh(cmd, timeout=12):
+                R["calls"].append(("ssh", cmd))
+                if cmd.startswith("kill "):
+                    R["procs"].pop(int(cmd.split()[1].rstrip(";")), None)
+                    return ""
+                o = []
+                for c in (0, 1):
+                    o.append("%d, U%d, %d, 24576, %d" % (
+                        c, c, sum(p["mem"].get(c, 0) for p in R["procs"].values()),
+                        R["util"][c]))
+                o.append("@@")
+                for pid, p in R["procs"].items():
+                    for c, mb in p["mem"].items():
+                        o.append("U%d, %d, %d" % (c, pid, mb))
+                o.append("@@")
+                for pid, p in R["procs"].items():
+                    o.append("%d %d %s" % (pid, p.get("et", 60), p["args"]))
+                return "\n".join(o)
+
+            def f_http(method, url, body=None, timeout=8):
+                R["calls"].append((method, url, body))
+                port = int(url.split(":")[2].split("/")[0])
+                path = "/" + url.split("/", 3)[3]
+                if port == 11434:
+                    return {"models": []}
+                run, pend = R["q"][port]
+                if path == "/queue" and method == "GET":
+                    return {"queue_running": list(run), "queue_pending": list(pend)}
+                if path == "/interrupt":
+                    del run[:]
+                    for p in R["procs"].values():          # the Turbo half lets go of card 2
+                        if "--port %d" % port in p["args"] or (port == 8188 and "8189"
+                                                               not in p["args"]):
+                            p["mem"][1] = 256
+                    return {}
+                if path == "/free":
+                    for p in R["procs"].values():
+                        if "--port %d" % port in p["args"]:
+                            p["mem"][1] = 200
+                    return {}
+                if path == "/prompt":
+                    pend.append([9, body.get("prompt_id"), body["prompt"], {}, []])
+                    return {"prompt_id": body.get("prompt_id")}
+                return {}
+
+            CM = "python main.py --listen 0.0.0.0 --port 8188"
+            CM2 = "python main.py --listen 0.0.0.0 --port 8189 --cuda-device 1"
+
+            def turbo_busy():
+                R["procs"].clear()
+                R["procs"][11] = {"args": CM, "mem": {0: 9000, 1: 21000}}
+                R["q"][8188] = [[[5, "TURBO1", TG, {"client_id": "app"}, []]], []]
+                R["q"][8189] = [[], []]
+                _cd._CACHE["snap"] = None
+            real = {"ssh": _cd._ssh_out, "http": _cd._http, "tb": _ac.tts_batch,
+                    "dep": _ac.deploy}
+            tts_calls = []
+
+            def f_tts(job, out_dir, language="English", engine="qwen"):
+                if fake.get("raise"):
+                    raise RuntimeError(fake["raise"])
+                _cd.preflight("voice", card=1)               # what the real one does first
+                tts_calls.append([c for c in R["calls"]])
+                wav = os.path.join(out_dir, "o.wav")
+                open(wav, "wb").write(b"RIFF0000WAVE")
+                return {"items": [{"out": wav}]}
+            fake = {}
+            _cd._ssh_out, _cd._http = f_ssh, f_http
+            _ac.tts_batch, _ac.deploy = f_tts, lambda: None
+            try:
+                # ================= §1 the CARDS panel
+                R["procs"][11] = {"args": CM, "mem": {0: 9906, 1: 256}}
+                R["procs"][12] = {"args": CM2, "mem": {1: 21266}, "et": 4 * 86400}
+                R["procs"][13] = {"args": "python3 mystery.py", "mem": {1: 2000}, "et": 3600}
+                root.update()
+                ck(cards_box is not None and not cards_box.winfo_ismapped() and
+                   "Show the machine room" in mr_lbl.cget("text"),
+                   "the CARDS panel starts tucked away behind 'Show the machine room'")
+                _toggle_machine_room()
+                root.update()
+                ck(cards_box is not None and cards_box.winfo_ismapped(),
+                   "a CARDS panel sits under RUN (one click away)")
+                cards_box.cards_refresh()
+                ck(wait(lambda: len([r for r in cards_box.cards_rows.winfo_children()
+                                     if hasattr(r, "cards_holder")]) == 3),
+                   "it lists everyone holding memory on either card")
+                rows = {r.cards_holder["pid"]: r for r in cards_box.cards_rows.winfo_children()
+                        if hasattr(r, "cards_holder")}
+                txt = lambda r: " ".join(w.cget("text") for w in r.winfo_children()
+                                         if w.winfo_class() == "Label")
+                ck("ComfyUI (card 2)" in txt(rows[12]) and "keeping a model loaded"
+                   in txt(rows[12]) and rows[12].cards_button.cget("text") == "Free",
+                   "the :8189 ComfyUI: what it is doing in words, and a Free button")
+                ck("⚠" in txt(rows[13]) and "looks stuck" in txt(rows[13])
+                   and rows[13].cards_button.cget("text") == "Stop",
+                   "an unknown idle program holding 2 GB for an hour: flagged STUCK, Stop")
+                heads = [w.cget("text") for w in cards_box.cards_rows.winfo_children()
+                         for w in ([w] + list(w.winfo_children()))
+                         if w.winfo_class() == "Label" and w.cget("text").startswith("Card ")]
+                ck(heads == ["Card 1", "Card 2"], "both cards have a row (%s)" % heads)
+                del R["calls"][:]
+                if rows[12].cards_button.cget("text") == "Free":   # Stop would ask (modal)
+                    rows[12].cards_button.invoke()
+                ck(wait(lambda: any(c[0] == "POST" and c[1].endswith(":8189/free")
+                                    for c in R["calls"]), 5), "Free asks THAT ComfyUI to let go")
+                ck(wait(lambda: 12 not in {r.cards_holder["pid"] for r in
+                                           cards_box.cards_rows.winfo_children()
+                                           if hasattr(r, "cards_holder")}, 15),
+                   "...and the panel catches up (its 21 GB are gone)")
+
+                # ================= §1b AUTO-UNLOAD: the picker, and the unload it does
+                iv, set_iv = cards_box.cards_idle
+                ck(iv.get() == "10 min", "the panel offers 'unload idle models after 10 min'")
+                set_iv("5 min")
+                ck(_cd.idle_minutes() == 5 and os.path.exists(os.path.join(
+                    DATA, "cards_settings.json")), "picking 5 min is saved")
+                R["procs"][11]["mem"] = {0: 9906, 1: 256}
+                R["q"][8188] = [[], []]
+                _cd.LAST_BUSY[8188] = time.time() - 6 * 60        # watched idle for 6 min
+                del R["calls"][:]
+                cards_box.cards_refresh()
+                ck(wait(lambda: any(c[0] == "POST" and c[1].endswith(":8188/free")
+                                    for c in R["calls"]), 10),
+                   "6 idle minutes on a 5-minute setting: ComfyUI is unloaded by itself")
+                ck(wait(lambda: cards_box.cards_reaped.cget("text").startswith(
+                    "auto-unloaded ComfyUI (9.9 GB)"), 8),
+                   "...and the panel says what it unloaded (%r)"
+                   % cards_box.cards_reaped.cget("text"))
+                set_iv("10 min")
+
+                # ================= §1c CARD MODE: Both
+                ck("Both" in [cards_menu["menu"].entrycget(i, "label") for i in
+                              range(cards_menu["menu"].index("end") + 1)],
+                   "CARD MODE offers Both")
+                del R["calls"][:]
+                _q2 = R["q"].pop(8189)                     # card 2's ComfyUI is NOT running
+                cards_var.set("Both")
+                apply_cards()
+                ck(_cd.route() == "both" and "two takes at once" in cards_note.cget("text"),
+                   "picking Both routes takes across the cards and says so")
+                ck(wait(lambda: any(c[0] == "ssh" and "--port 8189 --cuda-device 1" in c[1]
+                                    for c in R["calls"]), 6),
+                   "...and starts card 2's ComfyUI (it wasn't answering)")
+                R["q"][8189] = _q2                          # ...and now it answers
+                R["q"][8189] = [[[1, "K", {}, {}, []]], [[2, "L", {}, {}, []]]]
+                R["procs"][12] = {"args": CM2, "mem": {1: 9000}}
+                cards_box.cards_refresh()
+                ck(wait(lambda: any("1 making, 1 waiting" in w_.cget("text")
+                                    for w_ in cards_box.cards_rows.winfo_children()
+                                    for w_ in ([w_] + list(w_.winfo_children()))
+                                    if w_.winfo_class() == "Label"), 10),
+                   "the panel shows card 2's line (1 making, 1 waiting)")
+                R["q"][8189] = [[], []]
+                del R["calls"][:]
+                cards_var.set("Solo")
+                apply_cards()
+                ck(_cd.route() == "one" and wait(lambda: any(
+                    c[0] == "ssh" and "pkill" in c[1] for c in R["calls"]), 6),
+                   "back to Solo: card 2's idle ComfyUI is stopped")
+                R["procs"].pop(12, None)
+
+                # ================= §2 TRY A LINE on a busy card 2 -> the prompt
+                w = open_old_dialogue_workspace()     # the OLD window's TRY A LINE (new: TESTDIALOGUE3)
+                root.update()
+                P = w.dialogue_parts
+
+                def speak(text):
+                    # the previous line's job must have ENDED (else: "already rendering")
+                    wait(lambda: not w.dialogue_dump()["busy"], 15)
+                    P["quick_text"].set(text)
+                    P["quick_speak"]()
+
+                def prompt_up():
+                    pr = getattr(w, "cards_prompt", None)
+                    try:
+                        return pr if pr is not None and pr.winfo_exists() else None
+                    except Exception:
+                        return None
+                turbo_busy()
+                speak("Twelve kronor for rye?")
+                ck(wait(lambda: prompt_up() is not None), "a busy card 2 opens the prompt")
+                pr = prompt_up()
+                words = " ".join(x.cget("text") for x in pr.winfo_children()[0].winfo_children()
+                                 if x.winfo_class() == "Label")
+                ck("Card 2 is busy" in words and "Your voice line can't start yet." in words,
+                   "it says which card and what can't start (%r)" % words[:80])
+                ck("making something Forge Lab didn't start" in words
+                   or "making a video" in words, "it says what the card is doing")
+                labs = [b.cget("text") for b in pr.cards_buttons.values()]
+                ck(labs == ["Wait for it", "Do mine first (the render goes back in line)",
+                            "Stop the render", "Cancel"], "the four choices (%s)" % labs)
+                ck(not tts_calls, "nothing was started yet")
+                # --- DO MINE FIRST
+                del R["calls"][:]
+                pr.cards_pick("first")
+                ck(wait(lambda: len(tts_calls) == 1, 25), "Do mine first: the line is made")
+                pre = tts_calls[0]
+                ck(any(c[0] == "POST" and c[1].endswith(":8188/interrupt") for c in pre)
+                   and not any(c[0] == "POST" and c[1].endswith("/prompt") for c in pre),
+                   "the render was taken off the card BEFORE the voice ran")
+                ck(wait(lambda: any(c[0] == "POST" and c[1].endswith(":8188/prompt")
+                                    and c[2].get("prompt_id") == "TURBO1"
+                                    for c in R["calls"]), 10),
+                   "...and put back in line AFTER it, same take id")
+                ck(_cd.follow("TURBO1") == "TURBO1" and not _cd.HELD, "nothing left held")
+                # --- STOP IT (a voice job of someone else's)
+                R["procs"].clear()
+                R["procs"][21] = {"args": "x/rig_fish.py --job j", "mem": {1: 20000}, "et": 30}
+                R["q"][8188] = [[], []]
+                _cd._CACHE["snap"] = None
+                speak("He burns water.")
+                ck(wait(lambda: prompt_up() is not None), "busy again -> prompt")
+                pr = prompt_up()
+                ck([b.cget("text") for b in pr.cards_buttons.values()]
+                   == ["Wait for it", "Stop the voice job", "Cancel"],
+                   "a voice job can't be put back in line: Wait / Stop / Cancel")
+                pr.cards_pick("stop")
+                ck(wait(lambda: len(tts_calls) == 2, 25) and 21 not in R["procs"],
+                   "Stop: the voice job is killed and mine runs")
+                # --- WAIT FOR IT
+                turbo_busy()
+                speak("Bake it yourself.")
+                ck(wait(lambda: prompt_up() is not None), "busy again -> prompt")
+                prompt_up().cards_pick("wait")
+                ck(wait(lambda: "waiting for Card 2" in P["status"].cget("text"), 5),
+                   "Wait: the window says it is waiting, and for what")
+                time.sleep(1.0)
+                ck(len(tts_calls) == 2, "...and starts nothing while the render runs")
+                R["q"][8188][0][:] = []                          # the render finishes
+                R["procs"][11]["mem"][1] = 256
+                ck(wait(lambda: len(tts_calls) == 3, 25), "...then makes the line by itself")
+                # --- CANCEL
+                turbo_busy()
+                speak("It's rye, Avery.")
+                ck(wait(lambda: prompt_up() is not None), "busy again -> prompt")
+                prompt_up().cards_pick("cancel")
+                root.update()
+                time.sleep(1.0)
+                root.update()
+                ck(len(tts_calls) == 3 and "cancelled" in P["status"].cget("text"),
+                   "Cancel: nothing starts, and it says so")
+                # ================= §3 a rig error is ONE sentence; the traceback is logged
+                R["procs"].clear()
+                R["q"][8188] = [[], []]
+                _cd._CACHE["snap"] = None
+                fake["raise"] = ("command failed (1): ssh name@forge cd /tmp && python x\n"
+                                 "Traceback (most recent call last):\n" + "  File y\n" * 40
+                                 + "torch.OutOfMemoryError: CUDA out of memory. Tried 24 MiB")
+                speak("Outrageous.")
+                ck(wait(lambda: "TTS error" in P["status"].cget("text")),
+                   "a failed line reports an error")
+                t = P["status"].cget("text")
+                ck(t.startswith("TTS error: the card ran out of memory") and len(t) < 200
+                   and "Traceback" not in t, "...as one sentence, not a traceback (%r)" % t[:90])
+                logp = os.path.join(DATA, "forge_lab_errors.log")
+                ck(os.path.exists(logp) and "OutOfMemoryError" in open(logp).read(),
+                   "the full traceback is in forge_lab_errors.log")
+                fake.pop("raise")
+            except Exception as exc:
+                import traceback
+                traceback.print_exc()
+                ck(False, "driver crashed: %r" % exc)
+            finally:
+                _cd._ssh_out, _cd._http = real["ssh"], real["http"]
+                _ac.tts_batch, _ac.deploy = real["tb"], real["dep"]
+            print("TESTCARDMGR %s" % ("FAILED" if fails else "done"), flush=True)
+            for _f in fails:
+                print("   FAILED: %s" % _f, flush=True)
+            root.after(200, root.destroy)
+        root.after(1500, _tcards)
+    # ---- test driver: the EPISODE window end to end (Director + rig faked) ----
+    # FORGE_LAB_TESTEPISODE=1 FORGE_LAB_NOAUTOSAVE=1 FORGE_LAB_DATA=$(mktemp -d) python3 forge_lab.py
+    if os.environ.get("FORGE_LAB_TESTEPISODE") == "1":
+        def _tep():
+            import studio_pipeline as _sp
+            import dialogue as _dlg
+            fails = []
+
+            def ck(cond, label):
+                print("  %-4s %s" % ("ok" if cond else "FAIL", label), flush=True)
+                if not cond:
+                    fails.append(label)
+
+            def wait(cond, secs=20):
+                t0 = time.time()
+                while time.time() - t0 < secs:
+                    root.update()
+                    if cond():
+                        return True
+                    time.sleep(0.05)
+                return False
+
+            def ff(args, out):
+                os.makedirs(os.path.dirname(out), exist_ok=True)
+                subprocess.run(["ffmpeg", "-v", "error", "-y"] + args + [out],
+                               capture_output=True, timeout=60)
+
+            # ---- two saved characters (real files, temp DATA)
+            write_character("gus", {"name": "Gustav", "look": "a round baker"})
+            write_character("mary", {"name": "Robin", "look": "a tall librarian"})
+            # ---- one song in the run index, for the music bed
+            ff(["-f", "lavfi", "-i", "sine=f=330:d=2"], os.path.join(RUNS, "songfake", "s.mp3"))
+            _index_insert({"id": "songfake", "mode": "song", "lyrics": "[verse]\nBread for days",
+                           "style": "polka", "images": [{"file": "s.mp3"}], "t": time.time()})
+
+            # ---- a FAKED Director + rig: what the window does with answers, not the answers
+            log = []
+
+            class FakeDirector:
+                def load(self):
+                    pass
+
+                def pitch(self, char, n=5, length_s=60, brief=""):
+                    log.append("pitch")
+                    return [{"title": "Pitch %d" % i, "logline": "loaf trouble %d" % i,
+                             "hook": "h%d" % i} for i in range(n)]
+
+                def script(self, char, pitch, length_s=60):
+                    log.append("script:%s" % (pitch or {}).get("title"))
+                    return {"title": (pitch or {}).get("title"), "hook": "a hook",
+                            "beats": [{"t_start": 0, "t_end": 3, "speaker": "Gustav",
+                                       "action": "Gustav sniffs the loaf", "line": "Rye."},
+                                      {"t_start": 3, "t_end": 6, "speaker": "Robin",
+                                       "action": "Robin rolls her eyes", "line": "Again?"},
+                                      {"t_start": 6, "t_end": 9, "speaker": "",
+                                       "action": "the loaf falls", "line": ""}],
+                            "button": "thud"}
+
+                def shots(self, char, script):
+                    log.append("shots:%s" % script["beats"][0]["line"])
+                    return [{"n": i + 1, "seconds": 3, "action": b["action"],
+                             "line": b["line"], "speaker": b["speaker"],
+                             "prompt": b["action"]} for i, b in enumerate(script["beats"])]
+
+                def rewrite(self, text, how):
+                    log.append("rewrite:%s" % how)
+                    return text.replace("Rye.", "Rye, AGAIN.")
+
+            real = {k: getattr(_sp, k) for k in ("get_director", "voice_lines", "render_shot",
+                                                 "assemble", "from_dialogue")}
+            real_dlg_list = _dlg.list_projects
+            fake = {"fail": False, "hold": False, "rendering": False}
+            _fd = FakeDirector()
+
+            def f_voice(pj):
+                log.append("voice")
+                for sh in pj["shots"]:
+                    if (sh.get("line") or "").strip():
+                        wav = os.path.join(_sp.project_dir(pj["slug"]), "voice_%02d.wav"
+                                           % sh["n"])
+                        ff(["-f", "lavfi", "-i", "sine=f=500:d=0.5"], wav)
+                        sh["audio_wav"] = wav
+                _sp.save_project(pj)
+
+            def f_render(pj, n):
+                log.append("render:%d" % n)
+                if fake["hold"]:                    # hold the render so the Tk thread can
+                    fake["rendering"] = True        # click Stop WHILE it runs (never from here)
+                    while fake["hold"]:
+                        time.sleep(0.05)
+                time.sleep(0.3)
+                if fake["fail"]:
+                    raise RuntimeError("forge is asleep")
+                sh = _sp._shot(pj, n)
+                pid = "ep%02d%s" % (n, os.urandom(3).hex())
+                ff(["-f", "lavfi", "-i", "color=c=0x8a5a30:s=320x180:d=1"],
+                   os.path.join(RUNS, pid, "clip.mp4"))
+                sh.setdefault("takes", []).append(pid)
+                if not sh.get("chosen"):
+                    sh["chosen"] = pid
+                sh["status"] = "done"
+                _sp.save_project(pj)
+                return {"status": "done", "pid": pid}
+
+            def f_assemble(pj):
+                log.append("assemble:%s:%s" % (pj.get("music") and "music",
+                                               _sp.wants_captions(pj)))
+                d = _sp.project_dir(pj["slug"])
+                mp4 = os.path.join(d, pj["slug"] + "_final.mp4")
+                ff(["-f", "lavfi", "-i", "color=c=0x223344:s=320x180:d=1"], mp4)
+                cover = os.path.join(d, "cover.png")
+                ff(["-f", "lavfi", "-i", "color=c=0x223344:s=320x180", "-frames:v", "1"], cover)
+                pj["cut"] = {"mp4": mp4, "cover": cover}
+                _sp.save_project(pj)
+                return pj["cut"]
+
+            def f_from_dialogue(slug, cast=None, quality="Draft", title=None):
+                log.append("from_dialogue:%s:%s" % (slug, quality))
+                pj = _sp.new_project(["gus"], "from " + slug, length_s=30, quality=quality,
+                                     slug="dlg-" + slug, aspect="16:9")
+                pj["source"] = {"dialogue": slug}
+                pj["shots"] = [_sp._shot_migrate({"n": 1, "line": "Rye.", "speaker": "AVERY",
+                                                  "voice_from": "dialogue"}),
+                               _sp._shot_migrate({"n": 2, "line": "Good rye.",
+                                                  "speaker": "ROBIN",
+                                                  "voice_from": "dialogue"})]
+                _sp.save_project(pj)
+                return pj
+
+            _sp.get_director = lambda: _fd
+            _sp.voice_lines, _sp.render_shot = f_voice, f_render
+            _sp.assemble, _sp.from_dialogue = f_assemble, f_from_dialogue
+            _dlg.list_projects = lambda: ["bakery-row"]
+            try:
+                # ---- §1 the sidebar: one Episode row instead of Studio + Long video
+                root.update()
+                ck("Episode" in nav_rows and "Studio" not in nav_rows
+                   and "Long video" not in nav_rows,
+                   "sidebar: an Episode row, no Studio / Long video rows (%s)"
+                   % ", ".join(sorted(nav_rows)))
+                kind_var.set("Episode")
+                on_kind()
+                root.update()
+                w = (st.get("_episode_win") or {}).get("win")
+                ck(w is not None and w.winfo_exists() and w.title() == "Episode",
+                   "the Episode row opens the Episode window")
+                if w is None:
+                    raise RuntimeError("no Episode window")
+                ep = w.ep
+                kind_var.set("Episode")
+                on_kind()
+                root.update()
+                _wins = [c for c in root.winfo_children()
+                         if c.winfo_class() == "Toplevel"] + list(
+                    getattr(_dockref["d"], "tabs", None) or [])
+                ck((st.get("_episode_win") or {}).get("win") is w
+                   and sum(1 for c in _wins if c.title() == "Episode") == 1,
+                   "picking Episode again raises the SAME window")
+                ck([ep["chips"][s].cget("text") for s in ("Idea", "Script", "Shots", "Cut")]
+                   == ["1  Idea", "2  Script", "3  Shots", "4  Cut"],
+                   "four step chips, none done yet")
+                ck(ep["pages"]["Idea"].winfo_ismapped(), "it opens on the Idea page")
+                ep["go"]("Shots")
+                root.update()
+                ck(ep["st"]["page"] == "Idea" and "start an episode" in ep["status"].cget("text"),
+                   "no episode yet: the Shots chip says so and stays on Idea")
+
+                # ---- §2 Use my idea
+                ep["idea_var"].set("Gustav and the loaf")
+                ep["use_idea"]()
+                root.update()
+                ck(ep["st"]["pj"] is None and "character" in ep["status"].cget("text"),
+                   "no cast: Use my idea asks for a character and makes nothing")
+                ep["toggle_cast"]("gus")
+                ep["len_var"].set("90 s")
+                ep["use_idea"]()
+                root.update()
+                pj = ep["st"]["pj"]
+                disk = _sp.load_project(pj["slug"]) if pj else None
+                ck(disk is not None and disk["aspect"] == "16:9" and disk["characters"] == ["gus"]
+                   and disk["length_s"] == 90 and (disk.get("pitch") or {}).get("logline")
+                   == "Gustav and the loaf",
+                   "Use my idea saves a 16:9 episode: cast, length, the idea as the pitch")
+                ck(ep["st"]["page"] == "Script" and ep["chips"]["Idea"].cget("text")
+                   .startswith("✓"), "-> the Script page, Idea ticked")
+                first = pj["slug"]
+                ep["new"]()
+                ep["toggle_cast"]("gus")
+                ep["idea_var"].set("Gustav and the loaf")
+                ep["use_idea"]()
+                root.update()
+                ck(ep["st"]["pj"]["slug"] == first + "-2"
+                   and _sp.load_project(first) is not None,
+                   "the same idea twice makes a second episode, never overwrites the first "
+                   "(%s)" % ep["st"]["pj"]["slug"])
+
+                # ---- §3 Pitch me 5 -> choose
+                ep["new"]()
+                ep["toggle_cast"]("mary")
+                ep["toggle_cast"]("gus")
+                ep["idea_var"].set("a library of bread")
+                ep["pitch"]()
+                ck(wait(lambda: not ep["st"]["busy"]), "pitching finishes")
+                pb = [c for c in w.winfo_children()]       # noqa: F841 (keep the tree alive)
+                pj = ep["st"]["pj"]
+                ck(pj["characters"] == ["mary", "gus"] and log[-1:] == ["pitch"],
+                   "pitch ran once, cast in click order (Robin leads)")
+                ep["choose"](2)
+                root.update()
+                ck((_sp.load_project(pj["slug"]).get("pitch") or {}).get("title") == "Pitch 2"
+                   and ep["st"]["page"] == "Script", "Choose keeps that pitch -> Script")
+
+                # ---- §4 the script: write, edit (saves as you type), rewrite
+                ep["write_script"]()
+                ck(wait(lambda: not ep["st"]["busy"]), "writing finishes")
+                txt = ep["t_script"].get("1.0", "end")
+                ck("BEAT:" in txt and "Rye." in txt and log[-1] == "script:Pitch 2",
+                   "the written script is in the box")
+                ep["t_script"].delete("1.0", "end")
+                ep["t_script"].insert("1.0", txt.replace("Again?", "Not AGAIN."))
+                ck(wait(lambda: "Not AGAIN." in json.dumps(
+                    _sp.load_project(pj["slug"]).get("script")), 5),
+                   "an edit in the box is saved to the project by itself")
+                ep["plan"]()
+                ck(wait(lambda: not ep["st"]["busy"]), "planning finishes")
+                ck(log[-1] == "shots:Rye." and ep["st"]["page"] == "Shots"
+                   and len(ep["cards"]) == 3, "Plan the shots -> 3 shot cards on the board")
+                ck(any(s["line"] == "Not AGAIN." for s in ep["st"]["pj"]["shots"]),
+                   "the shots were planned from the EDITED script")
+                ck(ep["buttons"]["make"].cget("text") == "Make the 3 missing shots",
+                   "the button counts the missing shots")
+
+                # ---- §5 the inspector edits what renders
+                ep["select"](2)
+                ep["t_action"].delete("1.0", "end")
+                ep["t_action"].insert("1.0", "Robin drops a dictionary on the loaf")
+                ep["select"](1)
+                sh2 = _sp._shot(_sp.load_project(pj["slug"]), 2)
+                ck("dictionary" in sh2["action"] and "dictionary" in sh2["prompt"],
+                   "an inspector edit reaches the shot's ACTION and its render PROMPT")
+                ep["set_start"]("cont")
+                ck(_sp._shot(ep["st"]["pj"], 1)["video_mode"] == "r2v"
+                   and "first shot" in ep["status"].cget("text"),
+                   "shot 1 cannot start from a last shot")
+                ep["select"](2)
+                ep["set_start"]("cont")
+                ep["set_secs"](5)
+                sh2 = _sp._shot(_sp.load_project(pj["slug"]), 2)
+                ck(sh2["video_mode"] == "cont" and sh2["seconds"] == 5,
+                   "starts-from and length are saved")
+                ep["set_camera"]("Orbit")
+                sh2 = _sp._shot(_sp.load_project(pj["slug"]), 2)
+                ck("camera orbits" in sh2["prompt"] and sh2["camera_move"] == "Orbit" and
+                   ep["cam_btns"]["Orbit"].cget("bg") == C["ink"],
+                   "a camera chip puts the move in the shot's render prompt, and lights up")
+
+                # ---- §6 making shots: voices first, Stop after this shot, then the rest
+                del log[:]
+                fake["hold"] = True
+                ep["make_missing"]()
+                root.update()
+                ck(ep["buttons"]["make"].cget("state") == "disabled", "busy: Make is disabled")
+                ck(wait(lambda: fake["rendering"]), "shot 1 is rendering")
+                ck(ep["buttons"]["stop"].cget("state") == "normal"
+                   and ep["buttons"]["take"].cget("state") == "disabled",
+                   "while shots render: Stop is live, Another take is not")
+                ep["stop"]()                        # the click, on the Tk thread
+                fake["hold"] = False
+                ck(wait(lambda: not ep["st"]["busy"]), "the batch ends")
+                ck(log[:2] == ["voice", "render:1"] and log.count("voice") == 1,
+                   "the lines are voiced BEFORE the first shot renders (%s)" % log)
+                ck([x for x in log if x.startswith("render")] == ["render:1"],
+                   "Stop after this shot: only the running shot finished")
+                ck(ep["buttons"]["make"].cget("text") == "Make the 2 missing shots"
+                   and ep["buttons"]["make"].cget("state") == "normal",
+                   "the button now counts 2 missing and is usable again")
+                del log[:]
+                ep["make_missing"]()
+                ck(wait(lambda: not ep["st"]["busy"]), "the second batch ends")
+                ck(ep["buttons"]["stop"].cget("state") == "disabled",
+                   "idle: Stop is greyed out")
+                ck(log == ["render:2", "render:3"],
+                   "the rest render, no re-voicing (%s)" % log)
+                ck(all(s.get("chosen") for s in _sp.load_project(pj["slug"])["shots"])
+                   and ep["chips"]["Shots"].cget("text").startswith("✓")
+                   and ep["buttons"]["make"].cget("text") == "Every shot is made",
+                   "every shot kept, Shots ticked")
+                ck(wait(lambda: os.path.exists(os.path.join(
+                    _sp.project_dir(pj["slug"]), "frames")) and len(os.listdir(os.path.join(
+                        _sp.project_dir(pj["slug"]), "frames"))) == 3, 15),
+                   "a thumbnail per kept shot")
+
+                # ---- §7 another take + keep
+                ep["select"](1)
+                ep["another_take"]()
+                ck(wait(lambda: not ep["st"]["busy"]), "another take finishes")
+                sh1 = _sp._shot(_sp.load_project(pj["slug"]), 1)
+                ck(len(sh1["takes"]) == 2 and sh1["chosen"] == sh1["takes"][0],
+                   "another take adds a take and keeps the old one chosen")
+                ep["keep"](sh1["takes"][1])
+                sh1 = _sp._shot(_sp.load_project(pj["slug"]), 1)
+                ck(sh1["chosen"] == sh1["takes"][1], "Keep swaps the kept take")
+                chip_txt = [c.cget("text") for c in ep["cards"][1].winfo_children()
+                            if c.winfo_class() == "Label"]
+                ck("KEPT · 2 TAKES" in chip_txt, "the card says KEPT · 2 TAKES")
+
+                # ---- §8 a failure is reported and leaves the window usable
+                fake["fail"] = True
+                ep["another_take"]()
+                ck(wait(lambda: not ep["st"]["busy"]), "a failing take ends")
+                ck("failed" in ep["status"].cget("text") and "asleep" in ep["status"]
+                   .cget("text") and ep["buttons"]["take"].cget("state") == "normal",
+                   "the failure is on screen and the buttons come back")
+                fake["fail"] = False
+
+                # ---- §9 the bottom bar fits (Mac fonts run ~1.43x wider than Linux 'fixed')
+                bar = ep["bar"]
+                need = sum(b.winfo_reqwidth() for b in bar.winfo_children()) * 1.45
+                ck(need <= bar.winfo_width(), "the Make bar fits at Mac width (%d of %d px)"
+                   % (need, bar.winfo_width()))
+
+                # ---- §10 cut: music bed + captions
+                ep["go"]("Cut")
+                root.update()
+                mm = ep["music_map"]()
+                song = [k for k in mm if k != "none"]
+                ck(song == ["Bread for days"], "the music list offers your songs (%s)" % song)
+                ep["set_music"]("Bread for days")
+                _mb = _sp.load_project(pj["slug"])["music"] or ""
+                ck(_mb.startswith(os.path.join(DATA, "music")) and os.path.exists(_mb),
+                   "the picked song is the episode's music bed (kept in the MUSIC library, "
+                   "so pruning the take doesn't lose it)")
+                ck(not _sp.wants_captions(ep["st"]["pj"]), "16:9 episodes: no captions by default")
+                ep["toggle_captions"]()
+                ck(_sp.load_project(pj["slug"])["captions"] is True, "captions toggle is saved")
+                root.update()
+                _lk = [w_.cget("text") for w_ in ep["look_row"].winfo_children()]
+                ck(len(_lk) == 3 and _lk[0] == "Clean",
+                   "captions on -> Clean / Pop / Big chips show (%s)" % _lk)
+                ep["set_caption_look"]("pop")
+                root.update()
+                ep["set_pace"]("breathe")
+                ck(_sp.load_project(pj["slug"])["pace"] == "breathe" and
+                   len(ep["pace_row"].winfo_children()) == 5,
+                   "Episode: the Pace chips are there and the pick is saved")
+                ck(_sp.load_project(pj["slug"])["caption_look"] == "pop" and
+                   ep["look_row"].winfo_children()[1].cget("fg") == "#14110f",
+                   "picking Pop is saved and lit")
+                ep["cut"]()
+                ck(wait(lambda: not ep["st"]["busy"]), "the cut finishes")
+                ck(log[-1] == "assemble:music:True" and ep["chips"]["Cut"].cget("text")
+                   .startswith("✓"), "Cut assembles with music + captions; Cut ticked")
+                # ---- §10b the TIMELINE: leave out, nudge, reorder -> saved for the next cut
+                root.update()
+                _tp = ep["st"]["pj"]
+                _ns = [s_["n"] for s_ in _tp["shots"]]
+                ck(len(ep["st"].get("tl_blocks") or {}) == len(_ns) >= 2,
+                   "the Cut page shows the timeline: one block per shot")
+                ep["tl_select"](_ns[0])
+                ep["tl_nudge"]("nudge_in", 0.1)
+                ep["tl_nudge"]("nudge_out", -0.1)
+                ep["tl_move"](1)
+                ep["tl_select"](_ns[1])
+                _shd = os.environ.get("FORGE_LAB_SHOTDIR")
+                if _shd:
+                    root.update()
+                    subprocess.run(["import", "-window", "root", "-crop", "1400x900+0+0",
+                                    os.path.join(_shd, "episode_timeline.png")],
+                                   capture_output=True)
+                ep["tl_skip"]()
+                _sv = _sp.load_project(_tp["slug"])
+                _s0 = _sp._shot(_sv, _ns[0])
+                ck(_s0["nudge_in"] == 0.1 and _s0["nudge_out"] == -0.1 and
+                   [s_["n"] for s_ in _sv["shots"]][:2] == [_ns[1], _ns[0]] and
+                   _sp._shot(_sv, _ns[1])["skip"] is True,
+                   "start later / end earlier, move later and leave out are all saved")
+                ep["tl_skip"]()
+                ck(not _sp._shot(_sp.load_project(_tp["slug"]), _ns[1])["skip"],
+                   "...and a left-out shot can be put back")
+
+                # ---- §11 reopen lands on the right page
+                slug_done = pj["slug"]
+                ep["new"]()
+                ep["open"](first)
+                ck(ep["st"]["page"] == "Script" and ep["idea_var"].get() == "Gustav and the loaf",
+                   "reopening a scripted-but-unplanned episode lands on Script, idea filled in")
+                ep["open"](slug_done)
+                ck(ep["st"]["page"] == "Cut", "reopening a cut episode lands on Cut")
+
+                # ---- §12 from a Dialogue scene
+                ep["new"]()
+                ep["relist_dialogue"]()
+                ck(ep["dlg_var"].get() == "bakery-row", "the Dialogue scenes are listed")
+                ep["from_dialogue"]()
+                ck(log[-1] == "from_dialogue:bakery-row:Draft" and ep["st"]["page"] == "Shots"
+                   and len(ep["cards"]) == 2, "Make shots from it -> 2 lip-sync shot cards")
+                ep["select"](1)
+                ep["line_var"].set("Rye bread, Avery.")
+                ep["select"](2)
+                sh1 = _sp._shot(_sp.load_project("dlg-bakery-row"), 1)
+                ck(sh1["line"] == "Rye bread, Avery." and sh1["voice_from"] is None,
+                   "new words on a Dialogue shot: it is no longer the Dialogue take (re-voiced)")
+
+                # ---- §12c THE SET strip: place box, Build/Rebuild, plates shown
+                pjs = _sp.new_project(["gus", "mary"], "set test", length_s=6,
+                                      title="Set test", aspect="16:9")
+                pjs["shots"] = [_sp._shot_migrate({"n": i + 1, "speaker": spk,
+                                                   "video_mode": "set", "line": "x"})
+                                for i, spk in enumerate(("gus", "mary", "gus"))]
+                _sp.save_project(pjs)
+                ep["new"]()
+                ep["open"](pjs["slug"])
+                ep["go"]("Shots") if "go" in ep else None
+                root.update()
+                ck(ep["where_var"].get() == _sp.SET_DEFAULT_WHERE
+                   and "next shots" in ep["set_note"].cget("text")
+                   and ep["b_set"].cget("text") == "Build the set",
+                   "the set strip: default place, not built, says when it will be")
+                ep["where_var"].set("a bakery at dawn")
+                ep["where_done"]()
+                ck(_sp.load_project(pjs["slug"]).get("where") == "a bakery at dawn",
+                   "typing a place saves it to the episode")
+                _real_ms = _sp.make_set
+                _ms_calls = []
+
+                def _fake_ms(pj, progress=None, **kw):
+                    _ms_calls.append(pj.get("where"))
+                    d_ = os.path.join(_sp.project_dir(pj["slug"]), "set")
+                    outs = {}
+                    for k_ in ("master", "gus", "mary"):
+                        outs[k_] = os.path.join(d_, "%s.png" % k_)
+                        ff(["-f", "lavfi", "-i", "color=c=0x406080:s=160x90", "-frames:v",
+                            "1"], outs[k_])
+                    pj["set"] = {"where": _sp.set_where(pj), "master": outs["master"],
+                                 "singles": {"gus": outs["gus"], "mary": outs["mary"]}}
+                    _sp.save_project(pj)
+                    return pj["set"]
+                _sp.make_set = _fake_ms
+                try:
+                    ep["rebuild_set"]()
+                    ck(wait(lambda: not ep["st"]["busy"]), "building the set finishes")
+                    ck(_ms_calls == ["a bakery at dawn"] and
+                       len(ep["set_pics"].winfo_children()) == 3 and
+                       ep["b_set"].cget("text") == "Rebuild the set" and
+                       ep["set_note"].cget("text") == "3 shots start here",
+                       "Build the set -> the wide + 2 singles shown, 3 shots start there (%r)"
+                       % ep["set_note"].cget("text"))
+                finally:
+                    _sp.make_set = _real_ms
+
+                # ---- §12b BOTH cards: two shots at once; a shot that starts from the last
+                # shot waits for it
+                _cd = __import__("cards")
+                _cd.set_route("both")
+                ep["new"]()
+                ep["toggle_cast"]("gus")
+                ep["idea_var"].set("two lanes of bread")
+                ep["use_idea"]()
+                ep["write_script"]()
+                wait(lambda: not ep["st"]["busy"])
+                ep["plan"]()
+                wait(lambda: not ep["st"]["busy"])
+                pj3 = ep["st"]["pj"]
+                _sp._shot(pj3, 2)["video_mode"] = "cont"
+                for _s in pj3["shots"]:
+                    _s["audio_wav"] = __file__              # voiced already (any real file)
+                _sp.save_project(pj3)
+                lanes = {"live": set(), "peak": 0, "events": []}
+                _lk = threading.Lock()
+
+                def f_render2(pj, n):
+                    with _lk:
+                        lanes["live"].add(n)
+                        lanes["peak"] = max(lanes["peak"], len(lanes["live"]))
+                        lanes["events"].append(("start", n))
+                    time.sleep(0.8)
+                    sh = _sp._shot(pj, n)
+                    pid = "L%d%s" % (n, os.urandom(2).hex())
+                    ff(["-f", "lavfi", "-i", "color=c=0x8a5a30:s=320x180:d=1"],
+                       os.path.join(RUNS, pid, "clip.mp4"))
+                    sh.setdefault("takes", []).append(pid)
+                    sh["chosen"] = sh.get("chosen") or pid
+                    sh["status"] = "done"
+                    _sp.save_project(pj)
+                    with _lk:
+                        lanes["live"].discard(n)
+                        lanes["events"].append(("end", n))
+                    return {"status": "done", "pid": pid}
+                _sp.render_shot = f_render2
+                ep["go"]("Shots")
+                root.update()
+                _est = [w_.cget("text") for w_ in ep["bar"].winfo_children()
+                        if w_.winfo_class() == "Label"]
+                ck(any("two at a time" in t_ for t_ in _est),
+                   "the estimate says two at a time (%s)" % _est)
+                ep["make_missing"]()
+                ck(wait(lambda: not ep["st"]["busy"], 30), "the BOTH batch ends")
+                ev = lanes["events"]
+                ck(lanes["peak"] == 2, "two shots ran at the same time (peak %d)" % lanes["peak"])
+                ck(ev.index(("start", 2)) > ev.index(("end", 1)),
+                   "shot 2 starts from shot 1, so it waited for it (%s)" % ev)
+                ck(ev[:2] in ([("start", 1), ("start", 3)], [("start", 3), ("start", 1)]),
+                   "shots 1 and 3 went first, together")
+                ck(all(x.get("chosen") for x in _sp.load_project(pj3["slug"])["shots"]),
+                   "every shot kept, the project saved intact")
+                _cd.set_route("one")
+                _sp.render_shot = f_render
+
+                # ---- §13 the old windows are one click away
+                ep["go"]("Idea")
+                root.update()
+                ep["legacy"][0].event_generate("<Button-1>")
+                root.update()
+                sw = (st.get("_studio_win") or {}).get("win")
+                ck(sw is not None and sw.winfo_exists(), "Open the old Studio opens it")
+                try:
+                    sw.destroy()
+                except Exception:
+                    pass
+            except Exception as exc:
+                import traceback
+                traceback.print_exc()
+                ck(False, "driver crashed: %r" % exc)
+            finally:
+                for k, v in real.items():
+                    setattr(_sp, k, v)
+                _dlg.list_projects = real_dlg_list
+            print("TESTEPISODE %s" % ("FAILED" if fails else "done"), flush=True)
+            for _f in fails:
+                print("   FAILED: %s" % _f, flush=True)
+            root.after(200, root.destroy)
+        root.after(1500, _tep)
+    # ---- test driver: the REDESIGNED Characters window end to end (rig faked) ----
+    # FORGE_LAB_TESTCHAR2=1 FORGE_LAB_NOAUTOSAVE=1 FORGE_LAB_DATA=$(mktemp -d) python3 forge_lab.py
+    if os.environ.get("FORGE_LAB_TESTCHAR2") == "1":
+        def _tc2():
+            fails = []
+
+            def ck(cond, label):
+                print("  %-4s %s" % ("ok" if cond else "FAIL", label), flush=True)
+                if not cond:
+                    fails.append(label)
+
+            def wait(cond, secs=20):
+                t0 = time.time()
+                while time.time() - t0 < secs:
+                    root.update()
+                    if cond():
+                        return True
+                    time.sleep(0.05)
+                return False
+
+            # ---- a faked rig: a real PNG and a real MP4 under RUNS, nothing reaches forge
+            for pid_, fn, args in (("fakech", "s.png", ["-f", "lavfi", "-i",
+                                                         "color=c=0x5a4330:s=144x288",
+                                                         "-frames:v", "1"]),
+                                   ("fakecl", "c.mp4", ["-f", "lavfi", "-i",
+                                                         "testsrc=size=160x120:rate=12",
+                                                         "-t", "1", "-pix_fmt", "yuv420p"])):
+                os.makedirs(os.path.join(RUNS, pid_), exist_ok=True)
+                subprocess.run(["ffmpeg", "-v", "error", "-y"] + args +
+                               [os.path.join(RUNS, pid_, fn)], capture_output=True)
+            sent = []
+            g = globals()
+            real = {k: g[k] for k in ("submit", "run_state", "collect")}
+
+            def fake_submit(kind, p, refs=None):
+                sent.append((kind, dict(p), list(refs or [])))
+                return ("fakech" if kind == "t2i" else "fakecl",
+                        p["seed"] if p.get("seed", -1) >= 0 else 5150)
+            g["submit"] = fake_submit
+            g["run_state"] = lambda pid: {"state": "done"}
+            g["collect"] = lambda pid: {"id": pid, "images": [
+                {"file": "s.png" if pid == "fakech" else "c.mp4"}]}
+            try:
+                w = open_character_workspace()
+                root.update()
+                h = getattr(w, "ch2", None)
+                ck(h is not None, "Characters opens the REDESIGNED window")
+                ck(open_character_workspace() is w, "opening it again raises the same window")
+                ck(h["cur"]["slug"] is None, "it opens on a NEW character (nothing to select)")
+                ck("Weirdo" not in nav_rows, "Weirdo has no sidebar row of its own any more")
+
+                # ---- everything fits the window, every tab, without scrolling
+                w.update()
+                bot = w.winfo_rooty() + w.winfo_height()
+                for t in ("Look", "Body", "In motion", "Advanced"):
+                    h["tab"](t)
+                    w.update()
+                    pg = h["pages"][t]
+                    kids = [k for k in pg.winfo_children() if k.winfo_ismapped()]
+                    low = max(k.winfo_rooty() + k.winfo_height() for k in kids)
+                    ck(low <= bot, "the %s tab fits the window (%d of %d)" % (t, low, bot))
+                for k, b in h["buttons"].items():
+                    h["tab"]("Advanced" if k == "delete" else "Look")   # Delete lives there
+                    w.update()
+                    ck(b.winfo_ismapped() and b.winfo_rooty() + b.winfo_height() <= bot,
+                       "button %r is on screen" % k)
+                h["tab"]("Look")
+                # Mac headroom (fonts ~1.43x wider there): EVERY row of the middle column fits
+                mid = h["mid"]
+                for _row in mid.winfo_children():
+                    if _row.winfo_class() != "Frame" or not _row.winfo_children():
+                        continue
+                    need = sum(c.winfo_reqwidth() for c in _row.winfo_children()) + 8
+                    _txt = [c.cget("text") for c in _row.winfo_children()
+                            if c.winfo_class() in ("Label", "Button")][:3]
+                    ck(need * 1.45 <= mid.winfo_width() - 36,
+                       "middle row %s fits at Mac width (%d x1.45 = %d of %d)"
+                       % (_txt, need, need * 1.45, mid.winfo_width() - 36))
+
+                # ---- Surprise me = the weirdo roll, unsaved
+                for _ in range(3):
+                    h["surprise"]()
+                    root.update()
+                pk = h["picks"]()
+                broken = (1 if pk.get("Feature") else 0) + sum(
+                    1 for a in CHAR_SLIDER_ORDER if abs(char_slider_level(pk, a)) == 3)
+                ck(broken == 1, "Surprise me breaks exactly ONE thing (%d)" % broken)
+                ck(h["prompt_text"]() == compose_character_prompt(pk).strip(),
+                   "the prompt is composed from the rolled picks")
+                ck(bool(h["t_action"].get("1.0", "end").strip()), "the roll brings an action")
+                ck(list_characters() == [], "three rerolls saved NOTHING (no clutter)")
+                # editing an unsaved roll (no name, no still) must not write it either
+                _lv = dict(CHAR_OPTIONS)["Lighting"]
+                h["pk_vars"]["Lighting"].set(_lv[1])
+                h["on_pick"]()
+                h["flush"]()
+                ck(list_characters() == [] and "not saved yet" in h["status"].cget("text"),
+                   "editing an unnamed, still-less roll saves nothing and says so (%r)"
+                   % h["status"].cget("text"))
+
+                # ---- Make still -> saved automatically, with the seed it used
+                h["make_still"]()
+                ck(wait(lambda: h["cur"]["still"] and h["cur"]["slug"]), "the still lands")
+                ck(sent[-1][0] == "t2i" and sent[-1][1]["seed"] == -1, "it asked for a new face")
+                chars = list_characters()
+                ck(len(chars) == 1 and chars[0][1] == "character 1",
+                   "an unnamed character is saved as 'character 1' (%r)" % chars)
+                slug = h["cur"]["slug"]
+                meta = read_character(slug) or {}
+                ck(meta.get("picks") == h["picks"](), "its picks are saved")
+                ck(meta.get("seed") == "5150", "the seed forge used is saved (%r)" % meta.get("seed"))
+                ck(bool(character_still(slug)), "its still is copied into the character")
+                ck(getattr(h["prev"], "image", None) is not None, "the still is on screen")
+
+                # ---- a pick change re-composes and saves itself
+                axis_vals = dict(CHAR_OPTIONS)["Hair"]
+                h["pk_vars"]["Hair"].set(axis_vals[2])
+                h["on_pick"]()
+                h["flush"]()
+                ck(axis_vals[2] in h["prompt_text"](), "a pick re-composes the prompt")
+                ck((read_character(slug) or {}).get("picks", {}).get("Hair") == axis_vals[2],
+                   "...and is saved without pressing anything")
+
+                # ---- a hand-edited prompt survives a pick; Reset puts the picks back
+                tp = h["t_prompt"]
+                tp.insert("end", " Wears a tiny crown.")
+                tp.event_generate("<KeyRelease>")
+                h["pk_vars"]["Hair"].set(axis_vals[3])
+                h["on_pick"]()
+                ck("tiny crown" in h["prompt_text"](), "a hand edit is NOT overwritten by a pick")
+                h["reset_prompt"]()
+                ck(h["prompt_text"]() == compose_character_prompt(h["picks"]()).strip(),
+                   "Reset to the picks restores the composed prompt")
+
+                # ---- rename keeps the folder
+                h["name_var"].set("Gustav the Grim")
+                h["flush"]()
+                ck((read_character(slug) or {}).get("name") == "Gustav the Grim"
+                   and h["cur"]["slug"] == slug, "a rename saves, same folder (%s)" % slug)
+
+                # ---- a seed in the box locks the face
+                h["seed_var"].set("4242")
+                h["make_still"]()
+                ck(wait(lambda: sent[-1][1].get("seed") == 4242 and not h["cur"]["busy"]),
+                   "Seed 4242 is what the still asks for")
+                h["seed_var"].set("-1")
+
+                # ---- the test clip plays in the window and is kept with the character
+                h["make_clip"]()
+                ck(wait(lambda: bool(h["cur"]["frames"]), 30), "the test clip plays in the window")
+                ck(sent[-1][0] == "video" and len(sent[-1][2]) == 1
+                   and os.path.basename(sent[-1][2][0]) == "still.png",
+                   "the clip uses the character's still as its reference (%r)" % sent[-1][2])
+                h["flush"]()
+                ck(os.path.exists(os.path.join(char_dir(slug), "clip.mp4")),
+                   "the clip is kept in the character's folder")
+
+                # ---- Use in Video puts it on the main form
+                _nav_go("Video")
+                root.update()
+                h["use_in_video"]()
+                root.update()
+                mp = prompt.get("1.0", "end")
+                ck(axis_vals[3].split(",")[0] in mp, "Use in Video puts the look on the main form")
+                ck(st.get("refs") and os.path.basename(st["refs"][0]) == "still.png",
+                   "...and the still as ref 1 (%r)" % st.get("refs"))
+                _nav_go("Image")
+                if _dockref["d"] is not None:
+                    ck(_dockref["d"].cur is None,
+                       "TABS: Use in Video switches to the Make tab (the form it filled)")
+                w.lift()                       # back to the Characters tab
+                root.update()
+
+                # ---- New, then reopen the saved one
+                h["new"]()
+                ck(h["cur"]["slug"] is None and h["name_var"].get() == "", "New starts blank")
+                h["open"](slug)
+                ck(h["name_var"].get() == "Gustav the Grim", "reopening restores the character")
+                ck(h["cur"]["still"] and h["cur"]["still"].endswith("still.png"),
+                   "...and its still")
+
+                # ---- delete asks on the button, then deletes
+                h["delete"]()
+                ck(os.path.isdir(char_dir(slug)) and "Really" in h["buttons"]["delete"].cget("text"),
+                   "the first Delete only asks")
+                h["delete"]()
+                ck(not os.path.isdir(char_dir(slug)) and list_characters() == [],
+                   "the second Delete removes it")
+                # ---- WEIRDO (2026-10-17): the writer invents a whole character
+                import director as _dirm
+                import weirdos as _wdm
+                _real_chat = _dirm.Director._chat
+                _seen_user = []
+                _fake = {"out": {"name": "Dale Pruitt", "subject": "a suburban dad",
+                                 "pronoun": "he", "look": "balding, sunburnt",
+                                 "feature": "a neck as long as a giraffe's",
+                                 "wardrobe": "wearing a polo shirt and khaki shorts",
+                                 "setting": "in a backyard barbecue",
+                                 "action": "He flips a burger and nods at his own work",
+                                 "catchphrase": "\u201cThat's a good burger.\u201d",
+                                 "hook": "a dad so tall he grills on the roof",
+                                 "who": "Dale treats every barbecue like a state funeral.",
+                                 "voice": "a slow flat Midwestern baritone"}}
+
+                def _fchat(self_, system, user, schema, temperature=0.7, images=None,
+                           model=None):
+                    _seen_user.append(user)
+                    if _fake.get("raise"):
+                        raise RuntimeError("forge:11434 unreachable")
+                    return dict(_fake["out"])
+                _dirm.Director._chat = _fchat
+                try:
+                    ck(h["vein_var"].get() == "Anything",
+                       "Surprise me's flavour defaults to Anything (not only European)")
+                    ck(h["wflav_var"].get() == "Anything" and len(_wdm.FLAVOURS) >= 12,
+                       "Weirdo offers %d flavours, Anything first" % len(_wdm.FLAVOURS))
+                    h["t_desc"].delete("1.0", "end")
+                    h["t_desc"].insert("1.0", "a dad at a barbecue")
+                    h["weirdo"]()
+                    ck(wait(lambda: "meet Dale Pruitt" in h["status"].cget("text"), 15),
+                       "Weirdo invents one (%r)" % h["status"].cget("text")[:80])
+                    pt = h["prompt_text"]()
+                    ck("a suburban dad" in pt and "giraffe" in pt and "real human tissue" in pt
+                       and "backyard barbecue" in pt and "wearing wearing" not in pt.lower()
+                       and "He wears a polo shirt" in pt,
+                       "the still prompt is the format skeleton, cleaned (%r)" % pt[:120])
+                    _pv = {a: v.get() for a, v in h["pk_vars"].items()}
+                    ck(_pv["Subject"].startswith("a suburban dad") and "giraffe" in _pv["Feature"]
+                       and "barbecue" in _pv["Setting"] and "polo shirt" in _pv["Wardrobe"]
+                       and "cardigan" not in _pv["Wardrobe"]
+                       and _pv["Hair"] == "" and _pv["Skin"] == "",
+                       "Weirdo FILLS the pick boxes with its own look, no defaults left (%r)"
+                       % {k: _pv[k][:30] for k in ("Subject", "Wardrobe", "Hair")})
+                    ck("Make still" in h["prev"].cget("text") and not h["cur"]["still"],
+                       "the old picture is gone; the preview says to Make still")
+                    ck("first thing anyone notices" in pt,
+                       "the gag is pushed in the still prompt")
+                    ck(h["t_action"].get("1.0", "end").strip()
+                       == "flips a burger and nods at their own work",
+                       "the bit: verb first, no subject, no his/her")
+                    ck("That's a good burger." in h["bit_lbl"].cget("text")
+                       and "grills on the roof" in h["bit_lbl"].cget("text"),
+                       "the catchphrase and the hook show under the name")
+                    ck("a dad at a barbecue" in _seen_user[-1]
+                       and "ALREADY IN THE CAST" in _seen_user[-1],
+                       "the writer got the typed words and the cast to avoid")
+                    ck(h["cur"]["slug"] is None, "not saved until it has a name/still edit")
+                    h["name_var"].set("Dale Pruitt")
+                    h["flush"]()
+                    _sl = h["cur"]["slug"]
+                    _m = read_character(_sl) or {}
+                    ck(_m.get("catchphrase") == "That's a good burger."
+                       and (_m.get("bible") or {}).get("voice") == "a slow flat Midwestern baritone"
+                       and _m.get("note", "").startswith("WEIRDO"),
+                       "saved with its catchphrase, hook, bible + voice (%s)" % sorted(_m))
+                    h["new"]()
+                    h["open"](_sl)
+                    ck("That's a good burger." in h["bit_lbl"].cget("text"),
+                       "reopening shows the bit again")
+                    h["t_action"].insert("end", " twice")
+                    h["flush"]()
+                    _m2 = read_character(_sl) or {}
+                    ck(_m2.get("catchphrase") and _m2.get("note") and _m2.get("bible"),
+                       "an edit + save KEEPS the keys the editor doesn't show (a save used to "
+                       "drop them)")
+                    # the writer down -> the built-in pools, and the window SAYS so
+                    _fake["raise"] = True
+                    h["weirdo"]()
+                    ck(wait(lambda: "couldn't be reached" in h["status"].cget("text"), 15),
+                       "writer unreachable: rolled from the built-in list, and it says so")
+                    ck(h["prompt_text"]().startswith("A full-length photograph")
+                       and h["name_var"].get(), "...and it is still a complete character")
+                    ck("Dale Pruitt" in _seen_user[-1].split("ALREADY IN THE CAST")[1],
+                       "the next invention is told the saved cast, so gags don't repeat")
+                    _fake.pop("raise")
+                    # adults only, in code
+                    _fake["out"] = dict(_fake["out"], subject="a teenage boy")
+                    h["weirdo"]()
+                    ck(wait(lambda: "couldn't be reached" in h["status"].cget("text")
+                            and "minor" in h["status"].cget("text"), 15),
+                       "a minor from the writer is refused (rolled from the list instead)")
+                finally:
+                    _dirm.Director._chat = _real_chat
+                # ---- the vocabulary: a fashion model to a mail carrier, in submenus
+                _sm = h["pk_menus"]["Subject"]
+                _gr = dict(getattr(_sm, "cards_groups", []) or [])
+                ck(_sm.winfo_class() == "Menubutton" and {"Jobs", "Eras & legends",
+                                                         "Scenes & tribes"} <= set(_gr)
+                   and "a mail carrier" in _gr["Jobs"] and "a fashion model" in _gr["Runway"],
+                   "Subject is grouped into submenus (%s)" % sorted(_gr))
+                ck(len(dict(CHAR_OPTIONS)["Subject"]) >= 120
+                   and len(dict(CHAR_OPTIONS)["Wardrobe"]) >= 80
+                   and len(dict(CHAR_OPTIONS)["Setting"]) >= 60,
+                   "the lists are big (Subject %d, Wardrobe %d, Setting %d)" % tuple(
+                       len(dict(CHAR_OPTIONS)[a]) for a in ("Subject", "Wardrobe", "Setting")))
+                _top = _sm.cget("menu")
+                _tm = _sm.nametowidget(_top)
+                ck(_tm.index("end") + 1 == len(_gr) and _tm.type(0) == "cascade",
+                   "...one cascade per group")
+                h["new"]()
+                _jobs_menu = _tm.nametowidget(_tm.entrycget(1, "menu"))
+                _jobs_menu.invoke(0)
+                ck(h["pk_vars"]["Subject"].get() == _gr[_tm.entrycget(1, "label").split(
+                    "  (")[0]][0] and h["pk_vars"]["Subject"].get() in h["prompt_text"](),
+                   "picking from a submenu sets the Subject and the prompt follows")
+
+                # ---- ADULTS ONLY: swimwear / lingerie never go on a minor
+                h["new"]()
+                h["pk_vars"]["Subject"].set("a child of about six")
+                h["pk_vars"]["Wardrobe"].set("a red string bikini")
+                h["on_pick"]()
+                ck(h["pk_vars"]["Wardrobe"].get() == CHAR_OPTION_DEFAULTS["Wardrobe"]
+                   and "adult characters only" in h["status"].cget("text")
+                   and "bikini" not in h["prompt_text"](),
+                   "picking a bikini for a child resets the outfit and says why (%r | %r | %r)"
+                   % (h["pk_vars"]["Wardrobe"].get()[:30], h["status"].cget("text")[:60],
+                      h["prompt_text"]()[:80]))
+                h["pk_vars"]["Subject"].set("a fashion model")
+                h["pk_vars"]["Wardrobe"].set("a red string bikini")
+                h["on_pick"]()
+                ck("wearing a red string bikini" in h["prompt_text"](),
+                   "an adult keeps the bikini")
+                h["t_prompt"].delete("1.0", "end")
+                h["t_prompt"].insert("1.0", "A photo of a teenage girl in lingerie.")
+                h["make_still"]()
+                ck("not rendered" in h["status"].cget("text") and not h["cur"]["busy"],
+                   "Make still refuses a typed prompt with a minor in lingerie")
+
+                # ---- TYPE OR PICK: every pick is editable text with a ▾ list beside it
+                h["new"]()
+                _es = h["pk_entries"]["Subject"]
+                ck(_es.winfo_class() == "Entry" and all(
+                    h["pk_entries"][a].winfo_class() == "Entry" for a in h["pk_vars"]),
+                   "every pick is a text box you can type in")
+                _es.delete(0, "end")
+                _es.insert(0, "a retired rodeo clown who sells insurance")
+                h["typed"](now=True)
+                ck("a retired rodeo clown who sells insurance" in h["prompt_text"](),
+                   "a typed Subject goes into the prompt as-is")
+                _ew = h["pk_entries"]["Wardrobe"]
+                _ew.delete(0, "end")
+                _ew.insert(0, "wearing a suit made of bubble wrap")
+                _ew.focus_force()
+                root.update()
+                _ew.event_generate("<KeyRelease>")
+                ck(wait(lambda: "wearing a suit made of bubble wrap" in h["prompt_text"](), 3)
+                   and "wearing wearing" not in h["prompt_text"](),
+                   "typing re-composes by itself, and a typed 'wearing' is not doubled")
+                _ml = h["pk_menus"]["Lighting"]
+                _lm = _ml.nametowidget(_ml.cget("menu"))
+                _lm.invoke(_lm.index("end"))
+                ck(h["pk_vars"]["Lighting"].get() == dict(CHAR_OPTIONS)["Lighting"][-1]
+                   and h["pk_vars"]["Lighting"].get() in h["prompt_text"](),
+                   "the ▾ list still drops a choice into the box")
+                _es.delete(0, "end")
+                _es.insert(0, "a 15-year-old skateboarder")
+                _ew.delete(0, "end")
+                _ew.insert(0, "a tiny bikini")
+                h["typed"](now=True)
+                ck("bikini" not in h["prompt_text"]() and "adult characters only"
+                   in h["status"].cget("text"),
+                   "adults-only holds for TYPED text too (outfit reset)")
+                _es.delete(0, "end")
+                _es.insert(0, "a retired rodeo clown who sells insurance")
+                h["typed"](now=True)
+                h["name_var"].set("Rodeo Ron")
+                h["flush"]()
+                _rs = h["cur"]["slug"]
+                h["new"]()
+                h["open"](_rs)
+                ck(h["pk_vars"]["Subject"].get() == "a retired rodeo clown who sells insurance",
+                   "a typed value is saved with the character and comes back")
+
+                _el = os.path.join(DATA, "forge_lab_errors.log")
+                _txt = open(_el).read() if os.path.exists(_el) else ""
+                ck("Traceback" not in _txt and "TclError" not in _txt,
+                   "no Tk error or traceback logged")
+            finally:
+                g.update(real)
+            print("TESTCHAR2 %s" % ("FAILED" if fails else "done"), flush=True)
+            for _f in fails:
+                print("   FAILED: %s" % _f, flush=True)
+            root.after(200, root.destroy)
+        root.after(1500, _tc2)
+
+
     if os.environ.get("FORGE_LAB_TESTCHAR") == "1":
         def _tc():
             import tempfile as _tf
@@ -13199,6 +18126,67 @@ def launch():
         root.after(2500, _tc)
 
     # ---- test driver: the WEIRDO one-press studio (no GPU - nothing here submits) ----
+    # ---- test driver: an edited block reaches the VIDEO, not just the still (bug fix 4) ----
+    # FORGE_LAB_TESTWEIRDOVIDEO=1 FORGE_LAB_NOAUTOSAVE=1 FORGE_LAB_DATA=$(mktemp -d) python3 forge_lab.py
+    if os.environ.get("FORGE_LAB_TESTWEIRDOVIDEO") == "1":
+        def _twv():
+            fails = []
+
+            def ck(cond, label):
+                print("  %-4s %s" % ("ok" if cond else "FAIL", label), flush=True)
+                if not cond:
+                    fails.append(label)
+
+            g = globals()
+            real = {k: g[k] for k in ("submit", "run_state", "collect")}
+            sent = []
+            g["submit"] = lambda kind, p, refs=None: (sent.append((kind, p)) or ("fakew", 1))
+            g["run_state"] = lambda pid: {"state": "done"}
+            g["collect"] = lambda pid: {"id": pid, "images": []}
+            try:
+                w = open_weirdo_workspace()
+                root.update()
+                w.weirdo_roll()
+                root.update()
+                st_ = w.weirdo_state
+                ck(bool(st_.get("picks")), "ROLL produced a weirdo")
+                tp = w.weirdo_widgets["prompt"]
+                tp.delete("1.0", "end")
+                tp.insert("1.0", "A lighthouse keeper with a lobster for a left hand.")
+                st_["still"] = os.path.join(DATA, "fake_still.png")     # pretend RENDER STILL ran
+
+                def video_prompt():
+                    del sent[:]
+                    w.weirdo_video()
+                    t0 = time.time()
+                    while not sent and time.time() - t0 < 10:
+                        root.update()
+                        time.sleep(0.05)
+                    t1 = time.time()
+                    while st_.get("busy") and time.time() - t1 < 10:
+                        root.update()
+                        time.sleep(0.05)
+                    return sent[-1][1]["prompt"] if sent else ""
+
+                p = video_prompt()
+                ck("lobster for a left hand" in p, "MAKE THE VIDEO uses the EDITED block (%r)" % p[:70])
+                ck(CHAR_VIDEO_TAIL.strip() in p and CHAR_IDENTITY_TAIL.strip() not in p,
+                   "...with the video tail, not the still-photo tail")
+                # an UNTOUCHED block keeps the exact old picks-built prompt
+                tp.delete("1.0", "end")
+                tp.insert("1.0", compose_character_prompt(st_["picks"], for_video=False))
+                p2 = video_prompt()
+                want = compose_character_prompt(st_["picks"], for_video=True,
+                                                action=w.weirdo_widgets["action"].get("1.0", "end").strip())
+                ck(p2 == want, "an untouched block renders exactly as before")
+            finally:
+                g.update(real)
+            print("TESTWEIRDOVIDEO %s" % ("FAILED" if fails else "done"), flush=True)
+            for _f in fails:
+                print("   FAILED: %s" % _f, flush=True)
+            root.after(200, root.destroy)
+        root.after(1500, _twv)
+
     if os.environ.get("FORGE_LAB_TESTWEIRDO") == "1":
         def _tw():
             import random as _rnd
@@ -13539,6 +18527,220 @@ def launch():
         root.after(2600, _tw)
 
 # ---- test driver: the SONG window (GPU-free; FORGE_LAB_TESTSONG_GO=1 makes a real song) ----
+    # ---- test driver: the REDESIGNED Song window ----
+    # FORGE_LAB_TESTSONG2=1 FORGE_LAB_NOAUTOSAVE=1 FORGE_LAB_DATA=$(mktemp -d) python3 forge_lab.py
+    if os.environ.get("FORGE_LAB_TESTSONG2") == "1":
+        def _ts2():
+            import song as _sg
+            fails = []
+
+            def ck(cond, label):
+                print("  %-4s %s" % ("ok" if cond else "FAIL", label), flush=True)
+                if not cond:
+                    fails.append(label)
+
+            # ---- a library of 12 songs from earlier sessions, in the run index
+            for i in range(12):
+                rid = "oldsong%02d" % i
+                os.makedirs(os.path.join(RUNS, rid), exist_ok=True)
+                subprocess.run(["ffmpeg", "-v", "error", "-y", "-f", "lavfi", "-i",
+                                "sine=frequency=%d:duration=1" % (220 + i * 20),
+                                os.path.join(RUNS, rid, "yue2_%02d.flac" % i)],
+                               capture_output=True)
+                _index_insert({"id": rid, "mode": "song", "label": "Song", "status": "done",
+                               "started": time.time() - 3600 * (12 - i),
+                               "style": "folk, fiddle", "cover": i == 3,
+                               "lyrics": "[verse]\nSong number %d about bread\n" % i,
+                               "images": [{"file": "yue2_%02d.flac" % i}]})
+            w = open_song_workspace()
+            root.update()
+            P = w.song_parts
+            rows = [r for r in w.song_lines.winfo_children() if r.winfo_class() == "Frame"]
+            ck(len(rows) == 8, "YOUR SONGS shows a page of earlier songs at once (%d)" % len(rows))
+            _txt = " ".join(g.cget("text") for r in rows for c in r.winfo_children()
+                            for g in ([c] + list(c.winfo_children()))
+                            if g.winfo_class() == "Label")
+            ck("Song number 11 about bread" in _txt, "newest first, titled by its first line")
+            # Ryan 2026-10-21: "I cant see the song titles of the your songs list" -- the
+            # buttons packed first and squeezed the title cell to nothing. Every title on
+            # the page must be on screen and wide enough to read.
+            w.update()
+            _titles = [g for r in rows for c in r.winfo_children()
+                       for g in ([c] + list(c.winfo_children()))
+                       if g.winfo_class() == "Label" and "about bread" in g.cget("text")]
+            _narrow = [(g.cget("text"), g.winfo_width()) for g in _titles
+                       if not g.winfo_ismapped() or g.winfo_width() < 200]
+            ck(len(_titles) == 8 and not _narrow,
+               "every song title is visible and readable (%s)" % (_narrow[:2] or "all wide"))
+            _shd = os.environ.get("FORGE_LAB_SHOTDIR")
+            if _shd:
+                w.geometry("1280x800+0+0")
+                for _ in range(6):
+                    root.update()
+                    time.sleep(0.15)
+                subprocess.run(["import", "-window", "root", "-crop", "1280x800+0+0",
+                                os.path.join(_shd, "songs_list.png")], capture_output=True)
+            ck(P["older"].winfo_ismapped() and not P["newer"].winfo_ismapped(),
+               "page 1: Older is offered, Newer is not")
+            P["page"](1)
+            root.update()
+            rows2 = [r for r in w.song_lines.winfo_children() if r.winfo_class() == "Frame"]
+            ck(len(rows2) == 4, "page 2 has the other 4 (%d)" % len(rows2))
+            P["page"](-1)
+            # ---- Cover is its own tab; New song drops a picked recording
+            ck(not P["cov_box"].winfo_ismapped(), "New song: no recording picker on screen")
+            P["tab"]("Cover a recording")
+            root.update()
+            ck(P["cov_box"].winfo_ismapped(), "Cover tab: the recording picker shows")
+            w.song_set_cover(os.path.join(RUNS, "oldsong03", "yue2_03.flac"))
+            ck(w.song_dump()["cover"], "a recording is picked")
+            P["tab"]("New song")
+            root.update()
+            ck(w.song_dump()["cover"] is None and w.song_dump()["make_text"] == "Make the song",
+               "New song drops the recording and says Make the song")
+            # ---- a preset chip loads its style
+            _name, _style = _sg.STYLE_PRESETS[2]
+            P["chips"][_name].event_generate("<Button-1>")
+            root.update()
+            ck(w.song_dump()["style"] == _style.strip(), "a sound chip loads its style")
+            ck(str(P["chips"][_name].cget("bg")) == C["ink"], "...and lights up")
+            # ---- SOUND FAMILIES + the Voice switch + Mine (2026-10-17)
+            _fm = P["family"]
+            ck(len(_sg.SOUND_FAMILIES) >= 10 and len(_sg.all_sounds()) >= 50,
+               "60 sounds in 11 families are on offer")
+            w.update()
+            _sr = P["sound_row"]
+            _need = sum(c_.winfo_reqwidth() for c_ in _sr.winfo_children()) * 1.45
+            ck(_need <= _sr.winfo_width(), "the Sound / Voice row fits at Mac width (%d of %d)"
+               % (_need, _sr.winfo_width()))
+            _fm.set("R&B / Soul")
+            P["paint_chips"]()
+            root.update()
+            ck("Alt-girl future R&B" in P["chips"], "R&B / Soul has the alt-girl future R&B")
+            P["chips"]["Alt-girl future R&B"].event_generate("<Button-1>")
+            root.update()
+            _st = w.song_dump()["style"]
+            ck("futuristic alternative R&B" in _st and "airy breathy female vocal" in _st,
+               "...and it loads its style (%r)" % _st[:60])
+            P["voice"].set("male")
+            P["apply_voice"]()
+            _st2 = w.song_dump()["style"]
+            ck("expressive male vocal" in _st2 and "female" not in _st2
+               and "glassy synth pads" in _st2,
+               "Voice male swaps ONLY the vocal part (%r)" % _st2[:90])
+            P["voice"].set("as the sound")
+            P["apply_voice"]()
+            ck(w.song_dump()["style"] == _st, "Voice back to 'as the sound' restores it")
+            P["save_sound_as"]("Our theme", "English, cartoon theme, 130 BPM, choir")
+            root.update()
+            ck(w.song_dump()["family"] == "Mine" and "Our theme" in P["chips"]
+               and json.load(open(os.path.join(DATA, "song_sounds.json")))[0]["name"]
+               == "Our theme", "Save this sound: it lands in Mine, saved to disk")
+            _fm.set(_sg.SOUND_FAMILIES[0][0])
+            P["paint_chips"]()
+            root.update()
+            # ---- PLAN / SEED / MODEL are folded; Make is on screen
+            ck(not P["adv"].winfo_ismapped(), "Advanced starts folded")
+            ck(w.song_dump()["make_mapped"], "Make the song is on screen")
+            w.update()
+            bot = w.winfo_rooty() + w.winfo_height()
+            pb = P["pbar"]
+            ck(pb.winfo_ismapped() and pb.winfo_rooty() + pb.winfo_height() <= bot,
+               "the player bar is pinned on screen")
+            # ---- the busy message quotes the estimate, not "about 20 s"
+            w.song_set(seconds=120)
+            _est = w.song_dump()["estimate"]
+            P["st"]["busy"] = True
+            w.song_make()                      # a second Make while one is running
+            P["st"]["busy"] = False
+            _msg = w.song_dump()["status"]
+            ck(("%.0f s" % _est) in _msg and "20 s" not in _msg,
+               "a second Make quotes the real estimate (%r, est %.0f)" % (_msg, _est))
+            # ---- 2026-10-22: a Song is a QUEUE ENTRY like every other render ------------
+            # The window keeps its own watch/collect; the queue lends it a card. Fake the rig
+            # (the real dispatcher over fake lanes) and fake the run itself, so this proves the
+            # WIRING with no GPU and no forge: an entry goes on the board, it is given a card,
+            # the submit is PINNED to that card, and the entry is done the moment the take is in.
+            import dispatch as _dsp2
+            _keep = {n: globals()[n] for n in ("submit", "run_state", "collect")}
+            _pin, _saw = {"port": None, "mode": None}, {"n": 0}
+
+            def _fsubmit(mode, p_, refs=None):
+                _pin["port"] = (p_ or {}).get("port")
+                _pin["mode"] = mode
+                return ("songpid1", 4242)
+
+            globals()["submit"] = _fsubmit
+            globals()["run_state"] = lambda pid: {"state": "running" if _saw["n"] < 2 else "success"}
+            globals()["collect"] = lambda pid: {"id": "songpid1", "seed": 4242, "seconds": 60.0,
+                                                "images": [{"file": "yue2_fake.flac"}]}
+            # audio_seconds is a closure inside the window (an ffprobe of the take) — the fake
+            # flac below is a real file, so let it run rather than patching a local.
+            #
+            # ⚠️ THE WINDOW CAPTURES submit/run_state/collect FROM A CTX BUILT WHEN IT OPENS, so
+            # patching the module globals is not enough: with the fakes installed too late this
+            # driver pressed MAKE for real and put three 60 s YuE2 songs on the rig. Patch
+            # FIRST, then reopen the window (it is a one-window singleton — drop the cached one).
+            try:
+                w.destroy()
+            except Exception:
+                pass
+            (st.get("_song_win") or {}).pop("win", None)
+            _dsp2.PROBE["fn"] = lambda port: 0
+            # the seam is called POSITIONALLY: fn(card, need, snap) — a **kw stub raises.
+            _dsp2.ROOM["fn"] = lambda card, need, snap=None: {"ok": True}
+            _dsp2.start()
+            w = open_song_workspace()
+            P = w.song_parts
+            root.update()
+            try:
+                os.makedirs(os.path.join(RUNS, "songpid1"), exist_ok=True)
+                subprocess.run(["ffmpeg", "-v", "error", "-y", "-f", "lavfi", "-i",
+                                "sine=frequency=330:duration=1",
+                                os.path.join(RUNS, "songpid1", "yue2_fake.flac")],
+                               capture_output=True)
+                P["tab"]("New song")
+                w.song_set(style="folk, fiddle", seconds=60)
+                _n0 = len(_dsp2.queue().entries())
+                w.song_make()
+                _e, _deadline = None, time.time() + 25
+                while time.time() < _deadline:
+                    root.update()
+                    time.sleep(0.1)
+                    _saw["n"] += 1                  # the fake rig advances: running, then success
+                    _gates = [z for z in _dsp2.queue().entries() if z.get("kind") == "gate"]
+                    if _gates:
+                        _e = _gates[-1]
+                        if _dsp2.queue().get(_e["id"])["state"] in ("done", "failed"):
+                            break
+                ck(len(_dsp2.queue().entries()) == _n0 + 1 and _e is not None,
+                   "Make the song puts a QUEUE ENTRY on the board")
+                _fin = _dsp2.queue().get(_e["id"]) if _e else {}
+                ck(_fin.get("kind") == "gate", "...it is a gate (%s)" % _fin.get("kind"))
+                ck(bool(_fin.get("lane")), "...it is given a card (%s)" % _fin.get("lane"))
+                _want = 8188 if _fin.get("lane") == "comfy_a" else 8189
+                ck(_pin["mode"] == "song" and _pin["port"] == _want,
+                   "the song submit is PINNED to the card the queue claimed (%r, want %s)"
+                   % (_pin["port"], _want))
+                ck(_fin.get("state") == "done",
+                   "...and the entry is DONE the moment the take is in (%s)" % _fin.get("state"))
+                ck("done" in w.song_dump()["status"] and "PLAY" in w.song_dump()["status"],
+                   "the window says the song is in: %r" % w.song_dump()["status"])
+                ck(w.song_dump()["make_state"] == "normal",
+                   "...and Make is offered again (%s)" % w.song_dump()["make_state"])
+            finally:
+                _dsp2.stop()
+                for _n, _f in _keep.items():
+                    globals()[_n] = _f
+            _el = os.path.join(DATA, "forge_lab_errors.log")
+            _t = open(_el).read() if os.path.exists(_el) else ""
+            ck("Traceback" not in _t and "TclError" not in _t, "no Tk error logged")
+            print("TESTSONG2 %s" % ("FAILED" if fails else "done"), flush=True)
+            for _f in fails:
+                print("   FAILED: %s" % _f, flush=True)
+            root.after(200, root.destroy)
+        root.after(1500, _ts2)
+
     if os.environ.get("FORGE_LAB_TESTSONG") == "1":
         def _tso():
             import song as _song
@@ -13647,7 +18849,7 @@ def launch():
                % (len(_bad), len(_btns), _bad[:3]))
 
             # ---- REUSE WORDS: the lyrics you already wrote are never retyped ----
-            _reuse_b = next((b for b in _btns if str(b.cget("text")) == "REUSE WORDS"), None)
+            _reuse_b = next((b for b in _btns if str(b.cget("text")) == "Reuse last words"), None)
             ck(_reuse_b is not None, "there is a REUSE WORDS button")
             ck(bool(_reuse_b and _reuse_b.winfo_ismapped()), "and it is on screen")
             _lst = last_song_take()
@@ -13693,7 +18895,7 @@ def launch():
                                          if c.winfo_class() == "Button"]))
 
             # ---- WRITE LYRICS: the rig's own model writes the words ----
-            _wl = next((b for b in _btns if str(b.cget("text")) == "WRITE LYRICS"), None)
+            _wl = next((b for b in _btns if str(b.cget("text")) == "Write lyrics"), None)
             ck(_wl is not None, "there is a WRITE LYRICS button")
             ck(bool(_wl and _wl.winfo_ismapped()), "and it is on screen")
             ck(w.song_dump()["write_mapped"], "the write button is mapped, not starved")
@@ -13755,7 +18957,7 @@ def launch():
             _src = os.path.expanduser("~/forge-lab/runs/c41099f1-1b09-4924-8924-50ccd830874c/"
                                       "natasha_00002.flac")
             ck(w.song_dump()["cover"] is None, "it opens as an ORIGINAL (no cover picked)")
-            ck(w.song_dump()["make_text"] == "MAKE THE SONG", "and the button says so")
+            ck(w.song_dump()["make_text"] == "Make the song", "and the button says so")
             ck("none" in w.song_dump()["cover_label"], "the picker reads none")
             ck(w.song_dump()["plan_disabled"] == 0, "and the plan toggles are all live")
             # ⚠️ Pin the LENGTH first: the slider test above left it at 300 s, and picking a
@@ -13777,7 +18979,7 @@ def launch():
                 ck(d3["plan_disabled"] == 2,
                    "and full/off are DISABLED, so a combination the cover graph cannot honour "
                    "is not selectable (got %d disabled)" % d3["plan_disabled"])
-                ck(d3["make_text"] == "MAKE THE COVER", "the button changes to MAKE THE COVER")
+                ck(d3["make_text"] == "Make the cover", "the button changes to Make the cover")
                 ck(d3["duration"] == 120,
                    "the length follows the recording's own length (got %s s)" % d3["duration"])
                 ck(d3["estimate"] > _orig_est,
@@ -13786,7 +18988,7 @@ def launch():
 
                 # ⚠️ THE BUTTON'S MEANING FOLLOWS THE COVER. Ryan: "not for the last song for
                 # the cover song" — with a recording armed the words he wants are THAT song's.
-                ck(d3["reuse_text"] == "COVER'S WORDS",
+                ck(d3["reuse_text"] == "Cover's words",
                    "the words button re-labels itself for the cover (got %r)" % d3["reuse_text"])
                 ck(d3["lyrics_len"] > 0,
                    "and the words already in the box were NOT clobbered by picking a recording")
@@ -13816,7 +19018,7 @@ def launch():
                 w.song_set_cover(None)
                 root.update_idletasks()
                 d4 = w.song_dump()
-                ck(d4["cover"] is None and d4["make_text"] == "MAKE THE SONG",
+                ck(d4["cover"] is None and d4["make_text"] == "Make the song",
                    "CLEAR puts it back to an original")
                 ck(d4["plan_disabled"] == 0, "and re-enables the plan toggles")
             else:
@@ -13907,6 +19109,175 @@ def launch():
         root.after(2600, _tso)
 
 # ---- test driver: the DIALOGUE window (GPU-free; FORGE_LAB_TESTDIALOGUE_GO=1 renders) ----
+    # ---- test driver: the REDESIGNED Dialogue flow ----
+    # FORGE_LAB_TESTDIALOGUE2=1 FORGE_LAB_NOAUTOSAVE=1 FORGE_LAB_DATA=$(mktemp -d) python3 forge_lab.py
+    if os.environ.get("FORGE_LAB_TESTDIALOGUE2") == "1":
+        def _td2():
+            import dialogue as _dlg
+            fails = []
+
+            def ck(cond, label):
+                print("  %-4s %s" % ("ok" if cond else "FAIL", label), flush=True)
+                if not cond:
+                    fails.append(label)
+
+            def wait(cond, secs=8):
+                t0 = time.time()
+                while time.time() - t0 < secs:
+                    root.update()
+                    if cond():
+                        return True
+                    time.sleep(0.05)
+                return False
+
+            w = open_dialogue_workspace()
+            root.update()
+            P = w.dialogue_parts
+            # ---- fits the window, and the TRY A LINE row fits at Mac width
+            w.update()
+            bot = w.winfo_rooty() + w.winfo_height()
+            mb = P["makebar"]
+            ck(mb.winfo_ismapped() and mb.winfo_rooty() + mb.winfo_height() <= bot,
+               "the Make bar is pinned on screen")
+            qr = P["quick_row"]
+            fixed = sum(c.winfo_reqwidth() for c in qr.winfo_children()
+                        if c.winfo_class() != "Entry")
+            ck(fixed * 1.45 + 120 <= qr.winfo_width(),
+               "TRY A LINE fits at Mac width with room to type (%d x1.45 + 120 of %d)"
+               % (fixed, qr.winfo_width()))
+            ck(not P["quick_more"].winfo_ismapped(), "the scratch-voice knobs start folded")
+            # ---- typing a script parses it by itself and saves the project
+            long_line = "Twelve kronor for a single loaf of rye bread is nothing short of robbery."
+            sc = P["script"]
+            sc.insert("1.0", "> **AVERY** — %s\n> **ROBIN** — It's good rye.\n"
+                             "> **BAKER** — Eleven, then.\n" % long_line)
+            ck(wait(lambda: w.dialogue_dump()["lines"] == 3), "lines appear without a PARSE click")
+            pj = w.dialogue_project()
+            ck(pj["slug"].startswith("scene") and pj["slug"] in _dlg.list_projects(),
+               "a new project gets a unique name and is saved by itself (%r)" % pj["slug"])
+            ck("3 lines" in P["lint"].cget("text"), "the script says what it found (%r)"
+               % P["lint"].cget("text"))
+            # ---- uncast speakers say so; the whole line is shown
+            needs = [c for c in P["cast_frame"].winfo_children()
+                     for g in c.winfo_children()
+                     if g.winfo_class() == "Label" and "needs a voice" in g.cget("text")
+                     and g.winfo_ismapped()]
+            ck(len(needs) == 3, "each uncast speaker shows 'needs a voice' (%d)" % len(needs))
+            shown = [g.cget("text") for r in P["lines"].winfo_children()
+                     for g in r.winfo_children() if g.winfo_class() == "Label"]
+            ck(any(long_line in t for t in shown), "the whole line is shown, not 36 characters")
+            # VISIBLE, not just present: the topmost widget at the line's text must BE that label
+            # (the table used to be painted over by its own canvas and looked empty)
+            w.update()
+            _lbl = next((g for r in P["lines"].winfo_children() for g in r.winfo_children()
+                         if g.winfo_class() == "Label" and long_line in g.cget("text")), None)
+            _top = (w.winfo_containing(_lbl.winfo_rootx() + 4, _lbl.winfo_rooty() + 4)
+                    if _lbl is not None else None)
+            ck(_lbl is not None and _top is _lbl,
+               "the line is actually VISIBLE in the table (topmost there: %s)"
+               % (_top.winfo_class() if _top is not None else None))
+            ck("3 missing" in P["make"].cget("text"), "the Make button counts the lines to make (%r)"
+               % P["make"].cget("text"))
+            # ---- a mood chosen in the table survives editing the script
+            w.dialogue_set_line_mood(0, "angry")
+            sc.insert("end", "> **ROBIN** — Two loaves.\n")
+            ck(wait(lambda: w.dialogue_dump()["lines"] == 4), "an edit re-parses (4 lines)")
+            pj = w.dialogue_project()
+            ck(pj["lines"][0].get("mood") == "angry",
+               "line 1's chosen mood survives the re-parse (%r)" % pj["lines"][0].get("mood"))
+            saved = _dlg.load_project(pj["slug"]) or {}
+            ck(len(saved.get("lines", [])) == 4 and saved["lines"][0].get("mood") == "angry",
+               "...and the saved project has it too")
+            # ---- ▶ Play scene builds the scene when it is missing
+            pdir = os.path.dirname(P["scene_path"]())
+            os.makedirs(os.path.join(pdir, "lines"), exist_ok=True)
+            for li in pj["lines"]:
+                rel = "lines/%03d_0.wav" % li["idx"]
+                subprocess.run(["ffmpeg", "-v", "error", "-y", "-f", "lavfi", "-i",
+                                "sine=frequency=330:duration=0.4", "-ar", "24000", "-ac", "1",
+                                os.path.join(pdir, rel)], capture_output=True)
+                li["takes"] = [{"file": rel, "score": 1.0}]
+                li["kept"] = 0
+            ck(not os.path.exists(P["scene_path"]()), "no scene before Play")
+            w.dialogue_play_scene()
+            ck(os.path.exists(P["scene_path"]()), "▶ Play scene assembled the scene first")
+            # ---- GAP is saved with the project: move the REAL slider (Scale.set fires the same
+            # -command a drag does)
+            def _scales(x):
+                for c in x.winfo_children():
+                    if c.winfo_class() == "Scale":
+                        yield c
+                    yield from _scales(c)
+            gsc = next(_scales(P["makebar"]), None)
+            ck(gsc is not None, "the Gap slider exists (under More)")
+            if gsc is not None:
+                gsc.set(900)
+                ck(wait(lambda: (_dlg.load_project(pj["slug"]) or {}).get("gap_ms") == 900, 4),
+                   "moving Gap saves it with the project (%r)"
+                   % (_dlg.load_project(pj["slug"]) or {}).get("gap_ms"))
+            _el = os.path.join(DATA, "forge_lab_errors.log")
+            _txt = open(_el).read() if os.path.exists(_el) else ""
+            ck("Traceback" not in _txt and "TclError" not in _txt, "no Tk error logged")
+            print("TESTDIALOGUE2 %s" % ("FAILED" if fails else "done"), flush=True)
+            for _f in fails:
+                print("   FAILED: %s" % _f, flush=True)
+            root.after(200, root.destroy)
+        root.after(1500, _td2)
+
+    # ---- test driver: pick a voice from the CAST dropdown the way a click does (bug fix 1) ----
+    # FORGE_LAB_TESTDIALOGUECAST=1 FORGE_LAB_NOAUTOSAVE=1 FORGE_LAB_DATA=$(mktemp -d) python3 forge_lab.py
+    if os.environ.get("FORGE_LAB_TESTDIALOGUECAST") == "1":
+        def _tdc():
+            import dialogue as _dlg
+            import dialogue_ui as _dui
+            fails = []
+
+            def ck(cond, label):
+                print("  %-4s %s" % ("ok" if cond else "FAIL", label), flush=True)
+                if not cond:
+                    fails.append(label)
+
+            w = open_dialogue_workspace()
+            root.update_idletasks()
+            w.dialogue_set_script("> **AVERY** — You will not complain?\n"
+                                  "> **THOMAS** — To who? It's a website.\n")
+            w.dialogue_parse()
+            w.dialogue_new_voice("Thomas", "THOMAS")       # creates thomas + rebuilds the cast
+            _g = _dlg.new_voice("Avery")
+            _dlg.save_voice(_g)
+            w.dialogue_refresh_cast()
+            root.update_idletasks()
+            menu = w.dialogue_cast_menu("AVERY")
+            ck(menu is not None, "AVERY has a cast dropdown")
+            mm = menu["menu"]
+            labs = [mm.entrycget(i, "label") for i in range((mm.index("end") or 0) + 1)]
+            idx = next((i for i, l in enumerate(labs) if l.startswith("Avery")), None)
+            ck(idx is not None, "the dropdown offers Avery (%r)" % labs)
+            mm.invoke(idx)                                   # == a click on that entry
+            root.update_idletasks()
+            pj = w.dialogue_project()
+            ck(pj["cast"].get("AVERY") == _g["slug"],
+               "a hand pick stores the SLUG (%r), not the label" % pj["cast"].get("AVERY"))
+            voices = {v["slug"]: v for v in _dlg.list_voices()}
+            _d, _job, skipped = _dui.plan_render(pj, voices, "missing")
+            ck(not any("AVERY" in m for m in skipped),
+               "the render plan finds AVERY's voice (skipped: %r)" % skipped)
+            ck(w.dialogue_edit_voice(pj["cast"]["AVERY"]) is not None,
+               "EDIT opens the hand-picked voice")
+            # a project saved by the OLD code holds the label: rebuilding the cast repairs it
+            pj["cast"]["AVERY"] = labs[idx]
+            w.dialogue_refresh_cast()
+            root.update_idletasks()
+            ck(pj["cast"].get("AVERY") == _g["slug"],
+               "an old label-cast project is repaired to the slug (%r)" % pj["cast"].get("AVERY"))
+            ck(w.dialogue_dump()["cast"].get("AVERY") == _g["slug"],
+               "...and the dropdown shows it as cast")
+            print("TESTDIALOGUECAST %s" % ("FAILED" if fails else "done"), flush=True)
+            for _f in fails:
+                print("   FAILED: %s" % _f, flush=True)
+            root.after(200, root.destroy)
+        root.after(1500, _tdc)
+
     if os.environ.get("FORGE_LAB_TESTDIALOGUE") == "1":
         def _tdi():
             import dialogue as _dlg
@@ -13924,14 +19295,14 @@ def launch():
             d0 = w.dialogue_dump()
             ck(d0["lines"] == 0, "it opens with no parsed lines (got %d)" % d0["lines"])
 
-            # Paste the episode-teaser fixture and PARSE
-            fixture = """> **ALICE (V.O.)** — *(typing)* Field notes, day five: a parcel arrived for Bob.
-BOB holds a dented box: a toaster that was supposed to be a kettle.
-> **ALICE** — Are you going to complain?
-> **BOB** — To whom? It's an app.
-> **ALICE** — An app is not a person.
-> **ALICE** — *(holding the receipt up to the light)* I'm writing them a letter.
-**TITLE CARD: THE RETURN**"""
+            # Paste the 105-teaser fixture and PARSE
+            fixture = """> **AVERY (V.O.)** — *(quill scratching)* Survey of the Modern World. Entry Number Five: A parcel arrived for Thomas.
+THOMAS holds a mangled box: a cracked blender that was supposed to be a coffee maker.
+> **AVERY** — You will not complain?
+> **THOMAS** — To who? It's a website.
+> **AVERY** — A website is not a who.
+> **AVERY** — *(picking up the invoice like a treaty)* I shall write them a letter.
+**TITLE CARD: YOUNG AVERY**"""
             w.dialogue_set_script(fixture)
             root.update_idletasks()
             w.dialogue_parse()
@@ -13939,11 +19310,11 @@ BOB holds a dented box: a toaster that was supposed to be a kettle.
             d = w.dialogue_dump()
             ck(d["lines"] == 5, "PARSE gives 5 lines (got %d)" % d["lines"])
             ck(len(d["speakers"]) == 2, "PARSE gives 2 speakers (got %d)" % len(d["speakers"]))
-            ck("ALICE" in d["speakers"] and "BOB" in d["speakers"],
-               "speakers are ALICE and BOB (got %r)" % d["speakers"])
+            ck("AVERY" in d["speakers"] and "THOMAS" in d["speakers"],
+               "speakers are AVERY and THOMAS (got %r)" % d["speakers"])
 
-            # Create voice ALICE via the engine, verify compose_description
-            v = _dlg.new_voice("Alice")
+            # Create voice AVERY via the engine, verify compose_description
+            v = _dlg.new_voice("Avery")
             v["sliders"]["pace"] = 2
             desc = _dlg.compose_description(v)
             ck("no dramatic pauses" in desc,
@@ -13952,9 +19323,9 @@ BOB holds a dented box: a toaster that was supposed to be a kettle.
             ck("20-year-old male" in desc,
                "description starts with age and gender (got %r)" % desc[:50])
 
-            # Save ALICE to the voice bank, then create BOB too
-            v["characters"] = ["ALICE"]
-            v["slug"] = _dlg.slugify("Alice")
+            # Save AVERY to the voice bank, then create THOMAS too
+            v["characters"] = ["AVERY"]
+            v["slug"] = _dlg.slugify("Avery")
             os.makedirs(os.path.join(_dlg.voices_dir(), v["slug"]), exist_ok=True)
             _dlg.save_voice(v)
             # Refresh cast dropdowns via the window
@@ -13965,9 +19336,9 @@ BOB holds a dented box: a toaster that was supposed to be a kettle.
             root.update_idletasks()
             d2 = w.dialogue_dump()
             ck(bool(d2.get("cast")), "auto-cast produces at least one cast entry")
-            # Alice should auto-cast
-            ck(d2["cast"].get("ALICE") == "alice",
-               "ALICE auto-casts to 'alice' (got %r)" % d2["cast"].get("ALICE"))
+            # Avery should auto-cast
+            ck(d2["cast"].get("AVERY") == "avery",
+               "AVERY auto-casts to 'avery' (got %r)" % d2["cast"].get("AVERY"))
 
             # Estimate non-empty after parse + cast
             root.update_idletasks()
@@ -14016,16 +19387,17 @@ BOB holds a dented box: a toaster that was supposed to be a kettle.
             # WRITE DIALOGUE fill path (no network): a Director-shaped result lands in the box
             # in the house format and re-parses to the same speakers.
             w.dialogue_write_apply({"title": "Test", "lines": [
-                {"speaker": "ALICE", "direction": "gravely", "text": "The toll booth has nobody in it?"},
-                {"speaker": "BOB", "direction": "", "text": "It reads the plate."},
-                {"speaker": "ALICE", "direction": "", "text": "Then I'll pay the plate."}]})
+                {"speaker": "AVERY", "direction": "gravely", "text": "The bridge does not wish to be paid?"},
+                {"speaker": "THOMAS", "direction": "", "text": "It scans the plate."},
+                {"speaker": "AVERY", "direction": "", "text": "Then I shall pay the plate."}]})
             root.update_idletasks()
             dw = w.dialogue_dump()
             ck(dw["lines"] == 3, "WRITE DIALOGUE result parses to 3 lines (got %d)" % dw["lines"])
-            ck(dw.get("speakers") == ["ALICE", "BOB"],
+            ck(dw.get("speakers") == ["AVERY", "THOMAS"],
                "WRITE DIALOGUE keeps the speakers (got %r)" % dw.get("speakers"))
-            ck(any("WRITE DIALOGUE" in b for b in dw.get("buttons", [])),
-               "the WRITE DIALOGUE button is on screen")
+            # (renamed "Write it for me…" in the 2026-10-17 redesign)
+            ck(any("Write it for me" in b for b in dw.get("buttons", [])),
+               "the Write-it-for-me button is on screen")
 
             # ACCENT presets in the real editor: pick Old English -> box + prompt follow;
             # typing a custom accent flips the menu to "custom".
@@ -14050,6 +19422,36 @@ BOB holds a dented box: a toaster that was supposed to be a kettle.
                % (_inner_h, _cv.winfo_height(), _cv.yview()))
             ew.destroy()
 
+            # VOICE ENGINE dropdown — default qwen, switches, persists, and prices the run
+            d4 = w.dialogue_dump()
+            ck(d4.get("engine") == "qwen",
+               "the VOICE ENGINE starts on qwen (got %r)" % d4.get("engine"))
+            _q_est = d4.get("estimate_text", "")
+            ck(bool(_q_est), "the estimate is non-empty before switching (got %r)" % _q_est)
+
+            w.dialogue_set_engine("fish")
+            root.update_idletasks()
+            d5 = w.dialogue_dump()
+            ck(d5.get("engine") == "fish",
+               "picking Fish S2-Pro switches the engine (got %r)" % d5.get("engine"))
+            ck(d5.get("project_engine") == "fish",
+               "...and the PROJECT records it, so it survives a save (got %r)"
+               % d5.get("project_engine"))
+            ck("Fish S2-Pro" in d5.get("estimate_text", ""),
+               "the estimate names the engine it priced (got %r)" % d5.get("estimate_text"))
+            ck(d5.get("estimate_text") != _q_est,
+               "the fish estimate differs from the qwen one (both %r)" % _q_est)
+            ck("inline [tag]" in d5.get("engine_note", ""),
+               "the note says how fish handles a mood (got %r)" % d5.get("engine_note"))
+
+            w.dialogue_set_engine("qwen")
+            root.update_idletasks()
+            d6 = w.dialogue_dump()
+            ck(d6.get("engine") == "qwen", "switching back to qwen works (got %r)" % d6.get("engine"))
+            ck(d6.get("estimate_text") == _q_est,
+               "the qwen estimate returns to exactly what it was (got %r vs %r)"
+               % (d6.get("estimate_text"), _q_est))
+
             # ♪ sung via the LINES row: the estimate grows a YuE2 term
             w.dialogue_set_line_mood(1, "\u266a sung")
             root.update_idletasks()
@@ -14069,6 +19471,61 @@ BOB holds a dented box: a toaster that was supposed to be a kettle.
         root.after(2600, _tdi)
 
 # ---- test driver: the STUDIO window (GPU-free — every pipeline/charpack call STUBBED) ----
+    # ---- test driver: a shot edit typed in the card reaches the render (bug fix 3) ----
+    # FORGE_LAB_TESTSTUDIOEDIT=1 FORGE_LAB_NOAUTOSAVE=1 FORGE_LAB_DATA=$(mktemp -d) python3 forge_lab.py
+    if os.environ.get("FORGE_LAB_TESTSTUDIOEDIT") == "1":
+        def _tse():
+            import studio_pipeline as _sp
+            fails = []
+
+            def ck(cond, label):
+                print("  %-4s %s" % ("ok" if cond else "FAIL", label), flush=True)
+                if not cond:
+                    fails.append(label)
+
+            w = open_studio_workspace()
+            root.update()
+            st_ = w.studio_state
+            pj = _sp.project_migrate({"slug": "edit-test", "title": "edit-test",
+                                      "characters": ["bighead"], "script": {"title": "t"}})
+            pj["shots"] = [_sp._shot_migrate({
+                "n": 1, "seconds": 3, "intent": "character_action", "action": "he waves",
+                "line": "hello there", "prompt": "summary: he waves at the camera.",
+                "audio_wav": "/tmp/x.wav", "words": [{"w": "hello"}]})]
+            _sp.save_project(pj)
+            w.studio_open("edit-test")
+            root.update()
+            pj = st_["pj"]
+            v = st_["shot_vars"].get(1)
+            ck(v is not None, "the shot card has editable action/line fields")
+            v["action"].set("he trips over a hat")
+            v["line"].set("oh no")
+            # NOT saved by hand: RENDER must pick the edit up itself. The render's own worker is
+            # swapped for a recorder, so nothing reaches forge.
+            seen = {}
+            real_rs = _sp.render_shot
+            _sp.render_shot = lambda pj_, n: seen.update(
+                prompt=_sp.shot_params(pj_, pj_["shots"][0])["prompt"]) or {"status": "fake"}
+            try:
+                w.studio_render_one(1)
+                t0 = time.time()
+                while "prompt" not in seen and time.time() - t0 < 10:
+                    root.update()
+                    time.sleep(0.05)
+            finally:
+                _sp.render_shot = real_rs
+            p = seen.get("prompt", "")
+            ck("he trips over a hat" in p, "RENDER sends the EDITED action (%r)" % p[:70])
+            ck("he waves" not in p, "...and not the old one")
+            sh = pj["shots"][0]
+            ck(sh["line"] == "oh no" and sh["audio_wav"] is None,
+               "the edited line is queued for re-voicing (audio cleared)")
+            print("TESTSTUDIOEDIT %s" % ("FAILED" if fails else "done"), flush=True)
+            for _f in fails:
+                print("   FAILED: %s" % _f, flush=True)
+            root.after(200, root.destroy)
+        root.after(1500, _tse)
+
     if os.environ.get("FORGE_LAB_TESTSTUDIO") == "1":
         def _tst():
             import zlib
@@ -14536,6 +19993,234 @@ BOB holds a dented box: a toaster that was supposed to be a kettle.
             root.after(300, root.destroy)
         root.after(2700, _tst_go)
 
+    # ---- test driver: pinned RUN bar + Advanced fold (UI option A, slice 3) ----
+    # FORGE_LAB_TESTRUNBAR=1 FORGE_LAB_NOAUTOSAVE=1 FORGE_LAB_DATA=$(mktemp -d) python3 forge_lab.py
+    if os.environ.get("FORGE_LAB_TESTRUNBAR") == "1":
+        def _errtail(since=None):
+            """Size of the error log, or (with `since`) the text appended after that size."""
+            pth = os.path.join(DATA, "forge_lab_errors.log")
+            try:
+                if since is None:
+                    return os.path.getsize(pth)
+                with open(pth, encoding="utf-8", errors="replace") as fh_:
+                    fh_.seek(since)
+                    return fh_.read()
+            except Exception:
+                return 0 if since is None else ""
+
+        def _trb():
+            fails = []
+            _err0 = _errtail()
+
+            def ck(cond, label):
+                print("  %-4s %s" % ("ok" if cond else "FAIL", label), flush=True)
+                if not cond:
+                    fails.append(label)
+
+            def on_screen(w):
+                root.update()
+                bot = root.winfo_rooty() + root.winfo_height()
+                return w.winfo_ismapped() and w.winfo_rooty() + w.winfo_height() <= bot
+
+            root.geometry("1320x660")             # a SHORT window: the old layout hid RUN here
+            root.update()
+            ck(not str(estbox).startswith(str(left) + "."),
+               "the estimate block is not inside the scrolling column")
+            _nav_go("Video")
+            root.update()
+            for where in (0.0, 1.0, 0.0):
+                lcanvas.yview_moveto(where)
+                ck(on_screen(run_btn), "APPROVE & RUN fully on screen, form scrolled to %.0f%%"
+                   % (where * 100))
+            y0 = run_btn.winfo_rooty()
+            lcanvas.yview_moveto(1.0)
+            root.update()
+            ck(run_btn.winfo_rooty() == y0, "scrolling the form does not move RUN (pinned)")
+            ck(on_screen(est_lbl), "the estimate text is on screen with it")
+            # ⚠️ fit with MAC HEADROOM. macOS renders these buttons ~1.43x wider than the Linux
+            # test box (measured: the old one-row bar needed 438 px on the Mac vs 306 px here,
+            # in a 388 px column) and this Tk cannot scale its fallback font, so measure each
+            # button ROW here and require it to fit even at 1.45x.
+            _inner_l = estbox.winfo_rootx() + 16              # estbox padx=16
+            _inner_w = estbox.winfo_width() - 32
+            _rows = {}
+            for b in (run_btn, stop_btn, cancelq_btn):
+                _rows.setdefault(b.winfo_rooty(), []).append(b)
+            for _y, _bs in sorted(_rows.items()):
+                _need = max(b.winfo_rootx() + b.winfo_reqwidth() for b in _bs) - _inner_l
+                ck(_need * 1.45 <= _inner_w, "RUN-bar row %s fits at Mac width (%d x1.45 = %d of %d px)"
+                   % ([b.cget("text") for b in _bs], _need, _need * 1.45, _inner_w))
+            # ---- the fold
+            _nav_go("Image")
+            pick_model("Text to image")
+            root.update()
+            ck(not st.get("_adv_open"), "Advanced starts folded")
+            ck(qgrid.winfo_height() <= 2, "folded: the number fields take no room (%d px)"
+               % qgrid.winfo_height())
+            adv_lbl.event_generate("<Button-1>")
+            root.update()
+            ck(qgrid.winfo_height() > 40, "open: the fields are back (%d px)" % qgrid.winfo_height())
+            ck(e_steps.winfo_ismapped() and e_steps.winfo_height() > 10, "open: STEPS is usable")
+            e_steps.delete(0, "end")
+            e_steps.insert(0, "33")
+            adv_lbl.event_generate("<Button-1>")
+            root.update()
+            ck(qgrid.winfo_height() <= 2, "folded again (%d px)" % qgrid.winfo_height())
+            _mr0 = st.get("machine_room")
+            st["machine_room"] = True        # the step count is shown in the machine room
+            refresh_estimate()
+            root.update()
+            ck("33 steps" in est_lbl.cget("text"),
+               "a folded field still feeds the estimate (%r)" % est_lbl.cget("text")[:60])
+            st["machine_room"] = _mr0
+            refresh_estimate()
+            # set_mode re-packs ASPECT `before=qgrid` — must still work, and land ABOVE the fold
+            pick_model("Edit image")
+            pick_model("Text to image")
+            root.update()
+            ck(aspect_lbl.winfo_ismapped(), "ASPECT comes back for text-to-image")
+            ck(aspect_lbl.winfo_rooty() < adv_lbl.winfo_rooty(),
+               "ASPECT sits above the Advanced toggle, not under it")
+            _new = _errtail(_err0)
+            ck("Traceback" not in _new and "TclError" not in _new,
+               "no Tk error or traceback logged during the run (%r)" % _new[-120:])
+            print("TESTRUNBAR %s" % ("FAILED" if fails else "done"), flush=True)
+            for _f in fails:
+                print("   FAILED: %s" % _f, flush=True)
+            root.after(200, root.destroy)
+
+        root.after(1500, _trb)
+
+    # ---- test driver: click every MODEL card for real (UI option A, slice 2) ----
+    # FORGE_LAB_TESTMODELCARDS=1 FORGE_LAB_NOAUTOSAVE=1 FORGE_LAB_DATA=$(mktemp -d) python3 forge_lab.py
+    if os.environ.get("FORGE_LAB_TESTMODELCARDS") == "1":
+        def _tmc():
+            fails = []
+
+            def ck(cond, label):
+                print("  %-4s %s" % ("ok" if cond else "FAIL", label), flush=True)
+                if not cond:
+                    fails.append(label)
+
+            def click(labl):
+                # a REAL click on the card's title label — tests the binding, not pick_model
+                if not model_cards[labl][2] and not st.get("_cards_more_open"):
+                    cards_more_btn.event_generate("<Button-1>")
+                root.update()
+                model_cards[labl][1][0].event_generate("<Button-1>")
+                root.update()
+
+            def lit():
+                return [k for k, v in model_cards.items()
+                        if str(v[0].cget("highlightbackground")) == C["ochre"]]
+
+            root.update()
+            ck(not model_row.winfo_ismapped(), "the old MODEL dropdown row is hidden")
+            for kind in ("Image", "Video"):
+                _nav_go(kind)
+                root.update()
+                want = [c[2] for c in _choices(kind)]
+                ck(list(model_cards) == want, "%s: one card per model, registry order" % kind)
+                prim = [k for k, v in model_cards.items() if v[2]]
+                ck(1 <= len(prim) <= 4, "%s: %d big cards (the 2x2 grid holds 4)" % (kind, len(prim)))
+                for k in prim:
+                    fr, ws, _p = model_cards[k]
+                    ck(fr.winfo_ismapped(), "%s card %r is on screen" % (kind, k))
+                    over = [w.cget("text") for w in ws if w.winfo_reqwidth() > fr.winfo_width()]
+                    ck(not over, "%s card %r text fits (%s)" % (kind, k, over))
+                for labl in want:
+                    click(labl)
+                    ck(model_var.get() == labl, "click %r -> model is that" % labl)
+                    real = model_label(st["mode"], st.get("video_mode"), st.get("wan_mode"))
+                    ck(real == labl, "  ...and the ENGINE state agrees (%r)" % real)
+                    ck(lit() == [labl], "  ...and only that card is lit (%s)" % lit())
+                    if not model_cards[labl][2]:
+                        ck(model_cards[labl][0].winfo_ismapped(),
+                           "  ...a More-models pick stays visible")
+            # a remembered More-models pick must come back OPEN after a kind round-trip
+            click("WAN 2.2 \u00b7 First frame (i2v)")
+            _nav_go("Image")
+            root.update()
+            _nav_go("Video")
+            root.update()
+            ck(model_var.get() == "WAN 2.2 \u00b7 First frame (i2v)",
+               "Video remembers the WAN pick across Image -> Video")
+            ck(model_cards["WAN 2.2 \u00b7 First frame (i2v)"][0].winfo_ismapped(),
+               "...and its row is visible, not hidden under a closed More")
+            click("H3 \u00b7 Character reference (r2v)")
+            print("TESTMODELCARDS %s" % ("FAILED" if fails else "done"), flush=True)
+            for _f in fails:
+                print("   FAILED: %s" % _f, flush=True)
+            root.after(200, root.destroy)
+        root.after(1500, _tmc)
+
+    # ---- test driver: click every row of the workspace sidebar (UI option A, slice 1) ----
+    # FORGE_LAB_TESTSIDEBAR=1 FORGE_LAB_NOAUTOSAVE=1 FORGE_LAB_DATA=$(mktemp -d) python3 forge_lab.py
+    if os.environ.get("FORGE_LAB_TESTSIDEBAR") == "1":
+        def _tsb():
+            fails = []
+
+            def ck(cond, label):
+                print("  %-4s %s" % ("ok" if cond else "FAIL", label), flush=True)
+                if not cond:
+                    fails.append(label)
+
+            root.update()
+            want = [k for _t, k in NAV_ITEMS if k]
+            ck(sorted(nav_rows) == sorted(want), "sidebar has a row for every workspace (%s)"
+               % ", ".join(sorted(nav_rows)))
+            ck(not mode_row.winfo_ismapped(), "the old TYPE row is hidden")
+            nw = nav.winfo_width()
+            for k, (_r, _b, txt) in nav_rows.items():
+                right = txt.winfo_rootx() + txt.winfo_reqwidth() - nav.winfo_rootx()
+                ck(right <= nw, "%r label fits the sidebar (%d of %d px)" % (k, right, nw))
+            for k in ("Video", "Image"):
+                _nav_go(k)
+                root.update()
+                ck(kind_var.get() == k, "click %s -> kind is %r" % (k, kind_var.get()))
+                ck(nav_rows[k][1].cget("bg") == C["ochre"], "%s row is lit" % k)
+                others = [o for o in nav_rows if o != k and nav_rows[o][1].cget("bg") == C["ochre"]]
+                ck(not others, "only %s is lit (also lit: %s)" % (k, others))
+                labs = [c[2] for c in _choices(k)]
+                ck(model_var.get() in labs, "MODEL shows a %s model (%r)" % (k, model_var.get()))
+            _d = _dockref["d"]
+            ck(_d is not None and tab_strip.winfo_ismapped(),
+               "TABS: workspaces open as tabs in this window (a tab strip is shown)")
+            for k in NAV_WINDOWED:
+                if _d is None:
+                    break
+                before = list(_d.tabs)
+                _nav_go(k)
+                root.update()
+                after = [w for w in _d.tabs if w not in before]
+                ck(len(after) == 1 and _d.cur is after[0] and after[0].winfo_ismapped() and
+                   not home.winfo_ismapped(),
+                   "click %s opens exactly one TAB and shows it (%d)" % (k, len(after)))
+                ck(not [w for w in root.winfo_children() if w.winfo_class() == "Toplevel"],
+                   "...and no separate window")
+                if k in nav_rows:
+                    ck(nav_rows[k][1].cget("bg") == C["ochre"],
+                       "...its sidebar row is lit while it shows")
+                _nav_go(k)
+                root.update()
+                ck(len(_d.tabs) == len(before) + 1,
+                   "clicking %s again shows the same tab (no second one)" % k)
+                _nav_go("Image")
+                root.update()
+                ck(_d.cur is None and home.winfo_ismapped() and
+                   nav_rows["Image"][1].cget("bg") == C["ochre"],
+                   "Image -> the Make tab is back (the form, Image lit)")
+                for w in after:
+                    w.close()
+                root.update()
+                ck(not [w for w in after if w.winfo_exists()] and
+                   len(_d.tabs) == len(before), "the tab's x closes it")
+            print("TESTSIDEBAR %s" % ("FAILED" if fails else "done"), flush=True)
+            for _f in fails:
+                print("   FAILED: %s" % _f, flush=True)
+            root.after(200, root.destroy)
+        root.after(1500, _tsb)
+
     # ---- test driver: press POLISH PROMPT for me and report what the UI did ----
     if os.environ.get("FORGE_LAB_TESTLAYOUT") == "1":
         def _dump(tag):
@@ -14630,11 +20315,37 @@ BOB holds a dented box: a toaster that was supposed to be a kettle.
             # driver was asserting a FRESH-INSTALL default and failing for him. It fails on
             # the committed HEAD too, so it was broken before this work. Assert what is true
             # either way, then PIN the state the rest of this driver depends on.
-            ck(cards_var.get() in ("Solo", "Turbo", "Studio"),
-               "the restored card mode is one of the three (got %r)" % cards_var.get())
+            ck(cards_var.get() in ("Solo", "Both", "Turbo", "Studio"),
+               "the restored card mode is one of the four (got %r)" % cards_var.get())
             ck(migrate_card_mode(None) == "Solo",
                "and an unknown value still migrates to Solo (the fresh-install default)")
             cards_var.set("Solo")
+            free_card_var.set(True)
+            # 0 . the plain view (machine room closed): no CARD MODE at the defaults, plain
+            # words on the model cards; a setting in force still shows
+            st["machine_room"] = False
+            set_mode("t2i")
+            root.update()
+            ck(not vid_row_cards.winfo_ismapped() and not free_row.winfo_ismapped(),
+               "machine room closed + Solo: the CARD MODE rows are tucked away")
+            _sub = [w_.cget("text") for w_ in model_cards["Text to image"][1]]
+            ck("the best all-rounder" in _sub and not [t_ for t_ in _sub if "Qwen" in t_],
+               "...and the model cards say what each is for, not the engine (%r)" % _sub)
+            ck(est_lbl.cget("text").startswith("about ") and "steps" not in
+               est_lbl.cget("text"), "...and the estimate is a plain time (%r)"
+               % est_lbl.cget("text")[:50])
+            cards_var.set("Turbo")
+            relayout()
+            root.update()
+            ck(vid_row_cards.winfo_ismapped(),
+               "a card mode other than Solo stays on screen even with the room closed")
+            cards_var.set("Solo")
+            _toggle_machine_room()
+            root.update()
+            _sub = [w_.cget("text") for w_ in model_cards["Text to image"][1]]
+            ck(st["machine_room"] and vid_row_cards.winfo_ismapped() and
+               [t_ for t_ in _sub if "Qwen" in t_] and "steps" in est_lbl.cget("text"),
+               "Show the machine room brings back CARD MODE, the engine names and the steps")
             apply_cards()
             root.update_idletasks()
             ck(cards_var.get() == "Solo", "pinned to Solo so the rest of this driver is stable")
@@ -14878,6 +20589,90 @@ BOB holds a dented box: a toaster that was supposed to be a kettle.
             root.after(300, root.destroy)
         root.after(2500, _tw)
 
+    # ---- test driver: REROLL touches ONE scene; REROLL UNKEPT asks first (bug fix 2) ----
+    # FORGE_LAB_TESTLONGREROLL=1 FORGE_LAB_NOAUTOSAVE=1 FORGE_LAB_DATA=$(mktemp -d) python3 forge_lab.py
+    # The rig is FAKED (submit/run_state/collect swapped for stubs) — nothing reaches forge.
+    if os.environ.get("FORGE_LAB_TESTLONGREROLL") == "1":
+        def _tlr():
+            fails = []
+
+            def ck(cond, label):
+                print("  %-4s %s" % ("ok" if cond else "FAIL", label), flush=True)
+                if not cond:
+                    fails.append(label)
+
+            g = globals()
+            real = {k: g[k] for k in ("submit", "run_state", "collect")}
+            calls = []
+            g["submit"] = lambda em, p, ref_paths=None: (calls.append(em) or
+                                                         ("fake%d" % len(calls), 7))
+            g["run_state"] = lambda pid: {"state": "done"}
+            g["collect"] = lambda pid: {"images": []}
+            try:
+                w = open_long_video_workspace()
+                root.update()
+                plan = w.long_plan
+                del plan["scenes"][3:]
+                for s in plan["scenes"]:
+                    s["prompt"] = "a man walks into a bakery"
+                plan["scenes"][0]["takes"] = [{"seed": 1, "status": "done", "file": "x.mp4"}]
+                plan["scenes"][0]["keep"] = 0
+                w.long_refresh()
+                root.update()
+
+                def counts():
+                    return [len(s.get("takes") or []) for s in plan["scenes"]]
+
+                def wait_done(before):
+                    t0 = time.time()
+                    while time.time() - t0 < 30:
+                        root.update()
+                        if counts() != before and not w.long_state.get("drafting"):
+                            return True
+                        time.sleep(0.1)
+                    return False
+
+                b0 = counts()
+                w.long_pick(1)
+                root.update()
+                w.long_buttons["reroll"].invoke()
+                ck(wait_done(b0), "REROLL finished")
+                b1 = counts()
+                changed = [i for i in range(len(b0)) if b1[i] != b0[i]]
+                ck(changed == [1], "REROLL on scene 2 drafted only scene 2 (changed: %r)"
+                   % [i + 1 for i in changed])
+                ck(plan["scenes"][0].get("keep") == 0 and b1[0] == b0[0],
+                   "the kept scene 1 was not touched")
+                # rerolling a KEPT scene is an explicit ask: it gets a new take too
+                w.long_pick(0)
+                root.update()
+                w.long_buttons["reroll"].invoke()
+                ck(wait_done(b1), "REROLL on the kept scene finished")
+                b2 = counts()
+                ck([i for i in range(3) if b2[i] != b1[i]] == [0],
+                   "REROLL on kept scene 1 drafted only scene 1")
+                # REROLL UNKEPT must ASK before spending hours of GPU
+                tops0 = set(str(t) for t in w.winfo_children() if t.winfo_class() == "Toplevel")
+                n0 = len(calls)
+                w.long_buttons["reroll_unkept"].invoke()
+                root.update()
+                time.sleep(1.0)
+                root.update()
+                new = [t for t in w.winfo_children()
+                       if t.winfo_class() == "Toplevel" and str(t) not in tops0]
+                ck(len(new) == 1, "REROLL UNKEPT opens a confirmation first (%d)" % len(new))
+                ck(len(calls) == n0 and not w.long_state.get("drafting"),
+                   "...and nothing is submitted until it is confirmed")
+                for t in new:
+                    t.destroy()
+            finally:
+                g.update(real)
+            print("TESTLONGREROLL %s" % ("FAILED" if fails else "done"), flush=True)
+            for _f in fails:
+                print("   FAILED: %s" % _f, flush=True)
+            root.after(200, root.destroy)
+        root.after(1500, _tlr)
+
     if os.environ.get("FORGE_LAB_TESTLONG") == "1":
         # Drives the LONG VIDEO workspace headlessly: does it build, does the queue fill,
         # does the per-scene PROMPT EDITOR round-trip, does the "unkept only" filter work,
@@ -14917,7 +20712,7 @@ BOB holds a dented box: a toaster that was supposed to be a kettle.
             print("  treatment=%r" % d["treatment"], flush=True)
             ck(d["scenes"] == 12 and d["queue_rows"] == 12,
                "12 scenes and 12 queue rows (got %d/%d)" % (d["scenes"], d["queue_rows"]))
-            ck("H3" in d["treatment"] and "character_lora_v2" in d["treatment"]
+            ck("H3" in d["treatment"] and "character_lora_v1" in d["treatment"]
                and "AUDIO GUIDE" in d["treatment"],
                "treatment names the H3 engine, its LoRA and the audio guide (%r)"
                % d["treatment"][:76])
@@ -15234,7 +21029,7 @@ BOB holds a dented box: a toaster that was supposed to be a kettle.
                "keyframes: 12 to draft, t2i, at the TREATMENT canvas (%r)" % (inf,))
             ck(abs(inf["total"] - inf["per"] * inf["todo"]) < 1e-6,
                "the total is per-still × count, quoted BEFORE spending (%r)" % (inf["total"],))
-            w.long_set_ref("fake-ref.png")     # the mode choice never opens the file
+            w.long_set_ref("fake-avery.png")     # the mode choice never opens the file
             root.update_idletasks()
             ck(w.long_kf_info()["mode"] == "edit",
                "with a reference still, keyframes switch to EDIT (%r)"
@@ -15489,19 +21284,19 @@ BOB holds a dented box: a toaster that was supposed to be a kettle.
 
             # the treatment picks: without these the draft would fail at submit
             w.long_set_audio("/tmp/fake-track.mp3")
-            w.long_set_ref("/tmp/fake-ref.png")
+            w.long_set_ref("/tmp/fake-avery.png")
             root.update_idletasks()
             d4 = w.long_dump()
             ck("fake-track.mp3" in d4["treatment"],
                "the AUDIO pick shows on the treatment line (%r)" % d4["treatment"][-46:])
-            ck("fake-ref.png" in d4["treatment"],
+            ck("fake-avery.png" in d4["treatment"],
                "the REF pick shows on the treatment line")
             # and they must survive a round-trip through the REAL save path — not a direct
             # long_plan_save call, because the loaded-guard is exactly what governs that path
             w.long_refresh()
             back = long_plan_load(w.long_state["name"])
             ck(back.get("audio") == "/tmp/fake-track.mp3" and
-               back.get("ref") == "/tmp/fake-ref.png" and
+               back.get("ref") == "/tmp/fake-avery.png" and
                back.get("subject_block") == _blk,
                "audio + ref + the style block all persist in plan.json")
 
@@ -15903,7 +21698,8 @@ BOB holds a dented box: a toaster that was supposed to be a kettle.
             w = open_long_video_workspace()
             here = os.path.dirname(os.path.abspath(__file__))
             audio = os.path.join(here, "inputs/runtest_track.wav")
-            ref = os.path.expanduser("~/forge-lab-assets/character-ref.png")
+            ref = os.path.expanduser("~/project/pitch-deck/"
+                                     "images/avery-face-ref-canon.png")
             w.long_set_audio(audio)
             w.long_set_ref(ref)
             pl = w.long_plan
@@ -16129,6 +21925,1499 @@ BOB holds a dented box: a toaster that was supposed to be a kettle.
             traceback.print_exception(exc, val, tb)
             os._exit(3)
     root.report_callback_exception = _cb_err
+
+    if os.environ.get("FORGE_LAB_TESTTOUR") == "1":
+        # a screenshot of every window, for reviews: FORGE_LAB_SHOTDIR=dir (nothing submitted)
+        def _tour():
+            d_ = os.environ.get("FORGE_LAB_SHOTDIR") or "/tmp"
+            ok = []
+
+            def shot(name, w=None):
+                for _ in range(6):
+                    root.update()
+                    time.sleep(0.15)
+                if w is not None:
+                    try:
+                        w.geometry("1440x880+0+0")
+                        w.lift()
+                    except Exception:
+                        pass
+                    for _ in range(6):
+                        root.update()
+                        time.sleep(0.15)
+                subprocess.run(["import", "-window", "root", "-crop", "1440x880+0+0",
+                                os.path.join(d_, name + ".png")], capture_output=True)
+                ok.append(name)
+            root.geometry("1440x880+0+0")
+            shot("main")
+            for name, fn in (("quick", open_quick_workspace), ("apps", open_apps_workspace),
+                             ("characters", open_character_workspace),
+                             ("places", open_places_workspace),
+                             ("voices", open_voices_workspace),
+                             ("dialogue", open_dialogue_workspace),
+                             ("episode", open_episode_workspace),
+                             ("song", open_song_workspace)):
+                try:
+                    w = fn()
+                    shot(name, w)
+                    try:
+                        w.withdraw()
+                    except Exception:
+                        pass
+                except Exception as exc:
+                    print("  FAIL %s: %r" % (name, exc), flush=True)
+            for n in ok:
+                print("  ok   %s" % n, flush=True)
+            print("TESTTOUR done", flush=True)
+            root.after(300, root.destroy)
+        root.after(1500, _tour)
+
+    if os.environ.get("FORGE_LAB_TESTPLACES") == "1":
+        # PLACES in the real window, rig faked: make 3 -> keep -> change it -> use in Quick
+        def _tpl():
+            import forge_core as _fc
+            fails = []
+
+            def _pl_lib_count():
+                import places as _plc
+                return len(_plc.library())
+
+            def ck(cond, label):
+                print("  %-4s %s" % ("ok" if cond else "FAIL", label), flush=True)
+                if not cond:
+                    fails.append(label)
+
+            def wait(cond, secs=60):
+                t0 = time.time()
+                while time.time() - t0 < secs:
+                    root.update()
+                    if cond():
+                        return True
+                    time.sleep(0.05)
+                return False
+
+            def shot(name):
+                d_ = os.environ.get("FORGE_LAB_SHOTDIR")
+                if d_:
+                    for _ in range(4):
+                        root.update()
+                        time.sleep(0.15)
+                    subprocess.run(["import", "-window", "root", "-crop", "1240x820+0+0",
+                                    os.path.join(d_, name + ".png")], capture_output=True)
+            sent = []
+
+            def fake_submit(kind, p, refs=None):
+                sent.append((kind, dict(p), list(refs or [])))
+                pid = "tp%03d" % len(sent)
+                os.makedirs(os.path.join(RUNS, pid), exist_ok=True)
+                subprocess.run(["ffmpeg", "-v", "error", "-y", "-f", "lavfi", "-i",
+                                "color=c=0x%02x7050:s=%dx%d" % ((50 * len(sent)) % 256,
+                                                               p.get("width", 704),
+                                                               p.get("height", 1280)),
+                                "-frames:v", "1", os.path.join(RUNS, pid, "o.png")],
+                               capture_output=True)
+                return pid, 3
+            _fc.submit = fake_submit
+            _fc.wait_and_collect = lambda pid, timeout=1800, **k: {
+                "id": pid, "images": [{"file": "o.png"}]}
+            try:
+                ck(any(t == "Places" for t, _k in NAV_ITEMS), "a Places row under BUILD")
+                _nav_go("Places")
+                root.update()
+                w = st.get("_places_win", {}).get("win")
+                P = getattr(w, "pl", None)
+                ck(P is not None and w.title() == "Places", "the Places row opens the page")
+                w.geometry("1240x820+0+0")
+                P["make"]()
+                ck("describe" in P["status"].cget("text"), "Make with no description says so")
+                P["desc_var"].set("a lighthouse lamp room at dusk, brass instruments")
+                P["make"]()
+                ck(wait(lambda: not P["st"]["busy"]) and len(P["st"]["opts"]) == 3 and
+                   [k for k, _p, _r in sent] == ["t2i"] * 3,
+                   "Make 3 -> three pictures to pick from")
+                ck(P["name_var"].get() == "a lighthouse lamp room at dusk",
+                   "the name is filled in from the description")
+                shot("places_options")
+                # Ryan 2026-10-21: "the previews are too small for me to decide" -- a click
+                # on an option opens it as big as the page; it no longer keeps it.
+                _o = P["opt_box"].winfo_children()
+                _th = _o[1].winfo_children()[0] if len(_o) == 3 else None
+                _small = _th.winfo_height() if _th is not None else 0
+                if _th is not None:
+                    _th.event_generate("<Button-1>")
+                root.update()
+                B = P["st"].get("big")
+                ck(B is not None and B["i"] == 1 and len(B["paths"]) == 3
+                   and not _pl_lib_count(), "clicking an option opens it big (and keeps nothing)")
+                w.update()
+                _bigh = B["img"].winfo_height() if B else 0
+                ck(_bigh >= 2 * _small and B["img"].winfo_ismapped(),
+                   "the big view is at least twice the option's size (%d vs %d px)"
+                   % (_bigh, _small))
+                shot("places_big")
+                P["big_step"](1)
+                ck(P["st"]["big"]["i"] == 2, "Next steps to the third")
+                P["big_step"](1)
+                ck(P["st"]["big"]["i"] == 0, "...and wraps round to the first")
+                P["close_big"]()
+                root.update()
+                ck(P["st"].get("big") is None and len(P["st"]["opts"]) == 3,
+                   "Close goes back to the three, nothing kept")
+                P["big"](P["st"]["opts"], 1)
+                P["big_keep"]()
+                root.update()
+                ck(_pl_lib_count() == 1 and P["st"].get("big") is None,
+                   "Keep this one in the big view keeps it")
+                import places as _pl0                 # back to an empty library for the rest
+                import shutil as _sh0
+                _sh0.rmtree(_pl0.places_dir(), ignore_errors=True)
+                P["st"]["sel"] = None
+                P["st"]["opts"] = list(B["paths"])
+                P["paint"]()
+                root.update()
+                P["keep"](P["st"]["opts"][1])
+                root.update()
+                import places as _pl
+                lib = _pl.library()
+                ck(len(lib) == 1 and P["st"]["sel"] == lib[0][0] and not P["st"]["opts"],
+                   "Keep -> it's in YOUR PLACES and selected")
+                P["st"]["change_var"].set("at night")
+                P["variant"]()
+                ck(wait(lambda: not P["st"]["busy"]) and len(P["st"]["opts"]) == 3 and
+                   sent[-1][0] == "edit" and sent[-1][2] == [_pl.image(lib[0][0])],
+                   "Change it -> three versions of the SAME place")
+                P["keep"](P["st"]["opts"][0])
+                root.update()
+                ck(len(_pl.library()) == 2 and "(at night)" in _pl.library()[0][1],
+                   "the night version is kept next to the original")
+                shot("places_selected")
+                q = open_quick_workspace(place=lib[0][0])
+                root.update()
+                Q = q.qk
+                _txt = [x.winfo_children()[0].cget("text") if x.winfo_children() else
+                        x.cget("text") for x in Q["place_box"].winfo_children()
+                        if x.winfo_class() in ("Frame", "Label")]
+                ck(Q["st"]["place"] == lib[0][0] and
+                   any("lighthouse" in t for t in _txt),
+                   "Use it in Quick -> Quick opens with that place picked (%s)" % _txt)
+                ew = open_episode_workspace()
+                root.update()
+                ck("place_var" in ew.ep, "Episode's set strip offers kept places")
+            except Exception:
+                traceback.print_exc()
+                fails.append("exception")
+            print("TESTPLACES %s" % ("FAILED" if fails else "done"), flush=True)
+            root.after(300, root.destroy)
+        root.after(1500, _tpl)
+
+    if os.environ.get("FORGE_LAB_TESTAPPS") == "1":
+        # APPS in the real window, rig faked: an outfit swap -> "make it move" -> talking photo
+        def _tap():
+            import forge_core as _fc
+            import scene_engine as _se
+            import voicelab as _vl
+            fails = []
+
+            def ck(cond, label):
+                print("  %-4s %s" % ("ok" if cond else "FAIL", label), flush=True)
+                if not cond:
+                    fails.append(label)
+
+            def wait(cond, secs=60):
+                t0 = time.time()
+                while time.time() - t0 < secs:
+                    root.update()
+                    if cond():
+                        return True
+                    time.sleep(0.05)
+                return False
+
+            def shot(name):
+                d_ = os.environ.get("FORGE_LAB_SHOTDIR")
+                if d_:
+                    root.update()
+                    time.sleep(0.4)
+                    root.update()
+                    subprocess.run(["import", "-window", "root", "-crop", "1240x820+0+0",
+                                    os.path.join(d_, name + ".png")], capture_output=True)
+
+            def ffm(args, out):
+                os.makedirs(os.path.dirname(out), exist_ok=True)
+                subprocess.run(["ffmpeg", "-v", "error", "-y"] + args + [out],
+                               capture_output=True)
+                return out
+            sent = []
+
+            def f_submit(kind, p, refs=None):
+                sent.append((kind, dict(p), list(refs or [])))
+                pid = "tap%03d" % len(sent)
+                d_ = os.path.join(_fc.RUNS, pid)
+                if kind == "video":
+                    ffm(["-f", "lavfi", "-i", "color=c=0x406080:s=180x320:d=1", "-pix_fmt",
+                         "yuv420p"], os.path.join(d_, "clip.mp4"))
+                else:
+                    ffm(["-f", "lavfi", "-i", "color=c=0x8a6a40:s=360x640", "-frames:v", "1"],
+                        os.path.join(d_, "o.png"))
+                return pid, 1
+            _fc.submit = f_submit
+            _fc.wait_and_collect = lambda pid, timeout=1800, **k: {
+                "id": pid, "images": [{"file": x} for x in os.listdir(
+                    os.path.join(_fc.RUNS, pid))]}
+            _se.tts_batch = lambda job, out_dir, language="English", engine="qwen": {
+                "items": [{"id": i["id"], "out": ffm(["-f", "lavfi", "-i",
+                                                      "sine=frequency=300", "-t", "2.5"],
+                                                     os.path.join(out_dir, i["id"].replace(
+                                                         ":", "_") + ".wav"))}
+                          for i in job["design"] + job["clone"]]}
+            pic = ffm(["-f", "lavfi", "-i", "color=c=0x445566:s=720x1280", "-frames:v", "1"],
+                      os.path.join(DATA, "pic.png"))
+            _vl.keep(_vl.blank("Dale"), ffm(["-f", "lavfi", "-i", "sine=frequency=200", "-t",
+                                             "1"], os.path.join(DATA, "r.wav")))
+            try:
+                _nav_go("Apps")
+                root.update()
+                w = st.get("_apps_win", {}).get("win")
+                A = getattr(w, "ap", None)
+                ck(A is not None and w.title() == "Apps", "Apps is in the sidebar and opens")
+                w.geometry("1240x820+0+0")
+                A["pick"]("outfit")
+                A["set"]("image", pic)
+                A["text_var"].set("a yellow raincoat")
+                shot("apps_outfit")
+                A["go"]()
+                ck(wait(lambda: A["st"]["result"] and not A["st"]["busy"]),
+                   "Outfit swap runs and shows the result")
+                ck(sent[-1][0] == "edit" and "yellow raincoat" in sent[-1][1]["prompt"]
+                   and sent[-1][2] == [pic], "...an edit of the picked picture")
+                out1 = A["st"]["result"]["file"]
+                A["pick"]("move")
+                A["set"]("image", out1)
+                ck(wait(lambda: len(A["st"].get("move_loops") or {}) == 8, 90) and
+                   all(len(l_.imgs) >= 8 for l_ in A["st"]["move_loops"].values()),
+                   "Make it move: each camera move is a moving preview of YOUR picture")
+                _lp = A["st"]["move_loops"]["Orbit"]
+                _im0 = str(_lp.label.cget("image"))
+                _lp.start()
+                wait(lambda: False, 0.4)
+                ck(str(_lp.label.cget("image")) != _im0 and not
+                   A["st"]["move_loops"]["Crane up"].on,
+                   "...hovering one plays it; the others stay still")
+                _lp.stop()
+                shot("apps_moves")
+                # Ryan 2026-10-22: "make the screen scrollable, I cant see the generate button
+                # on the make it move screen" -- on a short window the panel scrolls to it
+                _geo0 = root.geometry()
+                root.geometry("1240x600+0+0")
+                w.lift()
+                wait(lambda: False, 0.6)
+                _pc = A["panel_cv"]
+                _sr = [float(v) for v in str(_pc.cget("scrollregion")).split()] or [0] * 4
+                _go = A["st"]["b_go"]
+                ck(_sr[3] > _pc.winfo_height() + 40,
+                   "Make it move on a short window: the panel is taller than its space "
+                   "(%d vs %d) and scrolls" % (_sr[3], _pc.winfo_height()))
+                _pc.yview_moveto(1.0)
+                wait(lambda: False, 0.3)
+                _gy = _go.winfo_rooty() - _pc.winfo_rooty()
+                ck(0 <= _gy and _gy + _go.winfo_height() <= _pc.winfo_height(),
+                   "...scrolled down, Make it is fully on screen (y %d of %d)"
+                   % (_gy, _pc.winfo_height()))
+                _pc.yview_moveto(0.0)
+                wait(lambda: False, 0.2)
+                for _k in range(6):
+                    A["panel"].event_generate("<MouseWheel>", delta=-120, x=20, y=20)
+                wait(lambda: False, 0.2)
+                ck(_pc.yview()[0] > 0.0, "...and the wheel scrolls it (%.2f)" % _pc.yview()[0])
+                A["pick"]("outfit")
+                wait(lambda: False, 0.2)
+                ck(_pc.yview()[0] == 0.0, "picking another app starts at its top")
+                A["pick"]("move")
+                root.geometry(_geo0)
+                wait(lambda: False, 0.4)
+                A["set"]("move", "Orbit")
+                A["go"]()
+                ck(wait(lambda: A["st"]["result"] and not A["st"]["busy"]),
+                   "the result goes straight into Make it move")
+                ck(sent[-1][0] == "video" and sent[-1][2] == [out1] and
+                   "orbits" in sent[-1][1]["prompt"], "...H3 from that picture, orbiting")
+                A["pick"]("talk")
+                A["set"]("image", pic)
+                A["line_var"].set("Expect delays.")
+                A["go"]()
+                ck(wait(lambda: not A["st"]["busy"]) and A["st"]["result"] and
+                   sent[-1][1].get("guide_audio_path"),
+                   "Talking photo: picked voice says the line, the clip lip-syncs to it")
+                shot("apps_talk")
+                vid = ffm(["-f", "lavfi", "-i", "testsrc=size=640x360:rate=24:d=1", "-pix_fmt",
+                           "yuv420p"], os.path.join(DATA, "wide.mp4"))
+                n_s = len(sent)
+                A["pick"]("vertical")
+                A["set"]("video", vid)
+                A["go"]()
+                ck(wait(lambda: A["st"]["result"] and not A["st"]["busy"]) and
+                   A["st"]["result"]["file"].endswith("_vertical.mp4") and len(sent) == n_s,
+                   "Make it vertical runs on the Mac and shows the 9:16 result")
+                A["pick"]("restyle")
+                A["set"]("image", pic)
+                A["set"]("style", "Anime")
+                A["go"]()
+                ck(wait(lambda: A["st"]["result"] and not A["st"]["busy"]) and
+                   "anime" in sent[-1][1]["prompt"], "Restyle: anime")
+                # ---- RESTYLE's STYLE STRIP, in the SHIPPED build (Opus, 2026-10-22) -----------
+                # Ryan: "leave the ones i have now i like them and update to include those ones"
+                # + "a box that is scrollable horizontally". The source matrix proves the
+                # behaviour; this proves the BUNDLE he is clicking has it (source green is not
+                # shipping green — TESTAPPS never looked at the strip before this).
+                import apps as _ap2
+                _st2 = A["st"]
+                _cv = _st2.get("style_canvas")
+                _chips = _st2.get("style_chips") or {}
+                ck(_cv is not None and _cv.winfo_exists(), "Restyle shows the STYLE strip")
+                ck(len(_chips) == len(_ap2.STYLES) and len(_chips) >= 45,
+                   "a chip for every style (%d of %d)" % (len(_chips), len(_ap2.STYLES)))
+                ck(len(_ap2.STYLE_GROUPS) == 7, "seven style groups (%d)"
+                   % len(_ap2.STYLE_GROUPS))
+                _new = [s for s in ("Courtroom sketch", "Felt puppet", "Night vision",
+                                    "Pulp paperback", "Ukiyo-e") if s in _chips]
+                ck(len(_new) == 5,
+                   "the new styles are in the shipped build (%s)" % ", ".join(_new))
+                ck(all(s in _chips for s in ("Claymation", "Anime", "Oil painting")),
+                   "...and the original ten he liked are still there")
+                ck(_cv.xview()[1] < 1.0 or _cv.winfo_reqwidth() > _cv.winfo_width(),
+                   "the strip is wider than its box, so it scrolls sideways")
+                A["set"]("style", "Courtroom sketch")
+                A["go"]()
+                ck(wait(lambda: A["st"]["result"] and not A["st"]["busy"]) and
+                   "courtroom" in sent[-1][1]["prompt"].lower(),
+                   "and a NEW style actually renders: courtroom sketch")
+                A["pick"]("product")
+                A["set"]("image", pic)
+                A["go"]()
+                ck(wait(lambda: not A["st"]["busy"]) and "product" in A["status"].cget("text"),
+                   "a missing input is a clear message, not a crash")
+            except Exception:
+                traceback.print_exc()
+                fails.append("exception")
+            print("TESTAPPS %s" % ("FAILED" if fails else "done"), flush=True)
+            root.after(300, root.destroy)
+        root.after(1500, _tap)
+
+    def quick_aspect_tall(Q):
+        import formats as _fm
+        return (_fm.get(Q["st"]["fmt"])["aspect"] == "9:16")
+
+    if os.environ.get("FORGE_LAB_TESTQUICK") == "1":
+        # QUICK end to end in the real window: rig + writer faked, everything else real
+        def _tqk():
+            import forge_core as _fc
+            import scene_engine as _se
+            import studio_pipeline as _sp
+            import director as _dmod
+            import quick as _q
+            fails = []
+
+            def ck(cond, label):
+                print("  %-4s %s" % ("ok" if cond else "FAIL", label), flush=True)
+                if not cond:
+                    fails.append(label)
+
+            def wait(cond, secs=90):
+                t0 = time.time()
+                while time.time() - t0 < secs:
+                    root.update()
+                    if cond():
+                        return True
+                    time.sleep(0.05)
+                return False
+
+            def shot(name):
+                d_ = os.environ.get("FORGE_LAB_SHOTDIR")
+                if d_:
+                    root.update()
+                    time.sleep(0.4)
+                    root.update()
+                    subprocess.run(["import", "-window", "root", "-crop", "1240x820+0+0",
+                                    os.path.join(d_, name + ".png")], capture_output=True)
+
+            def ffm(args, out):
+                os.makedirs(os.path.dirname(out), exist_ok=True)
+                subprocess.run(["ffmpeg", "-v", "error", "-y"] + args + [out],
+                               capture_output=True)
+                return out
+            sub_ = []
+
+            def f_submit(kind, p, refs=None):
+                sub_.append(kind)
+                pid = "tq%03d" % len(sub_)
+                d_ = os.path.join(_fc.RUNS, pid)
+                if kind == "video":
+                    ffm(["-f", "lavfi", "-i", "color=c=0x406080:s=320x180:d=1", "-f", "lavfi",
+                         "-i", "sine=frequency=200:d=1", "-shortest", "-pix_fmt", "yuv420p"],
+                        os.path.join(d_, "clip.mp4"))
+                else:
+                    ffm(["-f", "lavfi", "-i", "color=c=0x806040:s=96x160", "-frames:v", "1"],
+                        os.path.join(d_, "o.png"))
+                return pid, 1
+            _fc.submit = f_submit
+            _fc.wait_and_collect = lambda pid, timeout=1800, **k: {
+                "id": pid, "images": [{"file": x} for x in sorted(os.listdir(
+                    os.path.join(_fc.RUNS, pid)))]}
+            _sp.fl._index_update = lambda pid, **kw: None
+            _se.tts_batch = lambda job, out_dir, language="English", engine="qwen": {
+                "items": [{"id": i["id"], "out": ffm(["-f", "lavfi", "-i",
+                                                      "sine=frequency=300", "-t", "1.2"],
+                                                     os.path.join(out_dir, i["id"].replace(
+                                                         ":", "_") + ".wav"))}
+                          for i in job["design"] + job["clone"]]}
+            _se.transcribe_many = lambda paths, language="English": ["" for _ in paths]
+            _sp.finish = lambda i_, a_, o_, **k: shutil.copyfile(i_, o_)
+
+            class FD:
+                n = 0
+
+                def load(self):
+                    return {}
+
+                def _chat(self, system, user, schema, temperature=1.0, model=None):
+                    FD.n += 1
+                    k = FD.n % 2
+                    return {"name": ["Dale Orr", "Pam Voss"][k], "subject":
+                            ["a mall security guard", "a yoga instructor"][k], "pronoun":
+                            ["he", "she"][k], "look": "in their forties", "feature":
+                            ["a neck twice as long as normal", "eyebrows a foot wide"][k],
+                            "wardrobe": "a uniform", "setting": "a mall", "action":
+                            "nods", "catchphrase": "Not on my watch.", "hook": "loops",
+                            "who": "Very serious. Never notices.", "voice": "flat and dry"}
+
+                def pitch(self, ch, n=5, length_s=20, brief=""):
+                    return [{"title": "t", "logline": "a guard tickets a yoga class %d" % i,
+                             "hook": "h"} for i in range(n)]
+
+                def dialogue(self, brief, cast, seconds=30.0, model=None):
+                    a, b = sorted(cast)[0], sorted(cast)[-1]
+                    return {"title": "Neck Check", "lines": [
+                        {"speaker": a, "direction": "", "text": "Ma'am, your eyebrows."},
+                        {"speaker": b, "direction": "", "text": "They're load-bearing."}]}
+            _dmod.Director = FD
+            try:
+                _nav_go("Quick")
+                root.update()
+                w = st.get("_quick_win", {}).get("win")
+                Q = getattr(w, "qk", None)
+                ck(Q is not None and w.title() == "Quick", "Quick is in the sidebar and opens")
+                w.geometry("1240x820+0+0")
+                ck(Q["pick_var"].get() is True and Q["job_kwargs"]()["pick_draft"] is True,
+                   "Let me pick the script is on by default")
+                Q["pick_var"].set(False)           # (the flows below run straight through)
+                import formats as _fmts
+                ck(len(Q["fmt_box"].winfo_children()) == len(_fmts.FORMATS) and
+                   "invents 2 new characters" in Q["cast_note"].cget("text"),
+                   "every format shown; with nobody picked it says it will invent the cast")
+                Q["pick_fmt"]("music")
+                root.update()
+                ck(Q["snd_row"].winfo_ismapped() and Q["snd_var"].get() == "Alt-girl future R&B",
+                   "Music video shows a SOUND picker (default: alt-girl future R&B)")
+                Q["pick_fmt"]("sketch")
+                root.update()
+                ck(not Q["snd_row"].winfo_ismapped(), "...and hides it for the other formats")
+                shot("quick_start")
+                # THE IDEA NAMES ITS FORMAT: a suggestion, one click to take it
+                Q["t_idea"].insert("1.0", "a 20 second weatherman who forecasts feelings")
+                Q["t_idea"].event_generate("<KeyRelease>")
+                root.update()
+                ck(Q["guess_lbl"].winfo_ismapped() and "Weather report" in
+                   Q["guess_lbl"].cget("text") and "20 s" in Q["guess_lbl"].cget("text"),
+                   "an idea that names its format and length gets a one-click suggestion (%r)"
+                   % Q["guess_lbl"].cget("text"))
+                Q["take_guess"]()
+                root.update()
+                ck(Q["st"]["fmt"] == "weather" and Q["st"]["secs"] == 20 and
+                   not Q["guess_lbl"].winfo_ismapped(), "...taking it picks Weather report, 20 s")
+                Q["pick_fmt"]("sketch", user=True)
+                Q["t_idea"].event_generate("<KeyRelease>")
+                root.update()
+                ck(not Q["guess_lbl"].winfo_ismapped() or "Weather" not in
+                   Q["guess_lbl"].cget("text"),
+                   "...and once you pick a format yourself, it stops suggesting one")
+                Q["st"]["fmt_picked"] = False
+                Q["st"]["secs"] = None
+                Q["t_idea"].delete("1.0", "end")
+                Q["t_idea"].insert("1.0", "a mall guard tells a yoga teacher her eyebrows "
+                                          "are a hazard")
+                Q["ideas"]()
+                ck(wait(lambda: len([x for x in Q["ideas_box"].winfo_children()
+                                     if "tickets a yoga" in x.cget("text")]) == 3, 10),
+                   "give me ideas -> three to click")
+                _first = [x for x in Q["ideas_box"].winfo_children()][0]
+                _first.event_generate("<Button-1>")
+                root.update()
+                ck(Q["t_idea"].get("1.0", "end").strip() == "a guard tickets a yoga class 0",
+                   "clicking an idea puts it in the box")
+                Q["t_idea"].delete("1.0", "end")
+                Q["len_var"].set(37)
+                Q["len_moved"]()
+                ck("37 s" in Q["len_lbl"].cget("text") and Q["st"]["secs"] == 37,
+                   "length is a free slider (37 s), not fixed steps")
+                Q["len_var"].set(12)
+                Q["len_moved"]()
+                Q["check_var"].set(True)
+                ck(Q["st"]["aspect"] is None and quick_aspect_tall(Q),
+                   "a sketch starts TALL (phones first)")
+                Q["st"]["aspect"] = "16:9"             # this flow checks the wide extras
+                b0 = Q["b_go"].cget("text")
+                ck(b0.startswith("Make it \u00b7 ~") and "min" in b0, "the button quotes the time")
+                _g0 = w.geometry()
+                w.geometry("1240x680")
+                root.update()
+                _bg = Q["b_go"]
+                ck(_bg.winfo_ismapped() and _bg.winfo_y() + _bg.winfo_height() <=
+                   _bg.master.winfo_height(),
+                   "a short screen: Make it is still on screen (it was cut off on the MacBook)")
+                w.geometry(_g0.split("+")[0])
+                root.update()
+                Q["go"]()
+                ck(wait(lambda: (Q["st"]["job"] or {}).get("state") == "review:voices"
+                        and not Q["st"]["busy"]), "check each step: stops at the cast")
+                _txt = " ".join(x.cget("text") for x in Q["stage"].winfo_children()
+                                if x.winfo_class() == "Label")
+                ck("Meet the cast" in _txt, "...and shows them")
+                root.update()
+                ck(not Q["left_outer"].winfo_ismapped() and Q["right"].winfo_width() > 600
+                   and not Q["recent"].winfo_ismapped(),
+                   "a review gets the whole window: the form folds away (right %d px)"
+                   % Q["right"].winfo_width())
+                Q["show_form"]()
+                root.update()
+                ck(Q["left_outer"].winfo_ismapped() and Q["right"].winfo_width() <= 460 and
+                   Q["recent"].winfo_ismapped(),
+                   "...'show the form' brings it back")
+                _w0 = [str(x) for x in Q["steps_box"].winfo_children()]
+                Q["paint_steps"]()
+                Q["paint_steps"]()
+                _w1 = [str(x) for x in Q["steps_box"].winfo_children()]
+                Q["st"]["job"]["now"] = "shooting 3 of 8"
+                Q["paint_steps"]()
+                ck(_w0 and _w0 == _w1 and Q["now_lbl"].cget("text") == "shooting 3 of 8",
+                   "the progress list is NOT rebuilt when nothing changed (it flickered on "
+                   "the Mac twice a second); the status line still updates")
+                shot("quick_cast")
+                Q["cont"]()
+                ck(wait(lambda: Q["st"]["job"].get("state") == "review:script"
+                        and not Q["st"]["busy"]), "keep going -> stops at the script")
+                sb = Q["st"]["script_box"]
+                ck("load-bearing" in sb.get("1.0", "end"), "the script is there to edit")
+                root.update()
+                ck(not Q["left_outer"].winfo_ismapped() and int(sb.cget("height")) > 12,
+                   "the next review is wide again, with a taller script box")
+                sb.insert("end", "\n")
+                shot("quick_script")
+                Q["cont"]()
+                ck(wait(lambda: Q["st"]["job"].get("state") == "review:episode"
+                        and not Q["st"]["busy"], 120), "keep going -> stops at the set")
+                _txt = " ".join(x.cget("text") for x in Q["stage"].winfo_children()
+                                if x.winfo_class() == "Label")
+                _ep_ = _q.sp.load_project(Q["st"]["job"]["episode"])
+                _sing = sorted((_ep_.get("set") or {}).get("singles") or {})
+                ck("Does this look like them?" in _txt and len(_sing) == 2,
+                   "...'Does this look like them?' with the wide and both close-ups")
+                shot("quick_set")
+                _e0 = sub_.count("edit")
+                _old = dict((_ep_.get("set") or {}).get("singles") or {})
+                Q["redo_set"](_sing[0])
+                ck(wait(lambda: Q["st"]["job"].get("state") == "review:episode"
+                        and not Q["st"]["busy"], 120) and sub_.count("edit") == _e0 + 1,
+                   "redo one close-up -> ONE new picture, then it asks again")
+                _v_before = sub_.count("video")
+                Q["redo_set"]("master")
+                ck(wait(lambda: Q["st"]["job"].get("state") == "review:episode"
+                        and not Q["st"]["busy"], 120) and sub_.count("edit") == _e0 + 1 + 4
+                   and sub_.count("video") == _v_before,
+                   "rebuild the whole set -> 2 passes + 2 close-ups, no video spent yet")
+                Q["cont"]()
+                ck(wait(lambda: Q["st"]["job"].get("state") == "done"
+                        and not Q["st"]["busy"], 120), "Shoot it -> it finishes")
+                root.update()
+                ck(Q["left_outer"].winfo_ismapped(), "...and the form is back for the next idea")
+                _fk = Q["st"]["job"]["format"]
+                ck(wait(lambda: _fk in (Q["st"].get("fmt_loops") or {}), 60) and
+                   len(Q["st"]["fmt_loops"][_fk].imgs) >= 4,
+                   "its format card now shows a moving preview of the video just made")
+                ck(Q["st"].get("cap_loop") is not None and
+                   Q["st"]["cap_loop"].cv.winfo_exists(),
+                   "the CAPTIONS row shows the picked look moving")
+                Q["setcheck_var"].set(False)
+                j = Q["st"]["job"]
+                ck(os.path.exists(j.get("final") or "") and sub_.count("video") == 4,
+                   "a finished video: one shot per line + a reaction per character (%s)"
+                   % j.get("error"))
+                _btns = [x.cget("text") for fr in Q["stage"].winfo_children()
+                         for x in ([fr] + list(fr.winfo_children()))
+                         if x.winfo_class() == "Button"]
+                ck(any("Watch it" in b for b in _btns), "Watch it is offered")
+                # (test run 2026-10-18: on a laptop screen the actions sat below the fold)
+                _geo0 = root.geometry().split("+")[0]
+                root.geometry("1360x760")          # a MacBook Air's window, maximised
+                root.update()
+                Q["paint_stage"]()
+                root.update()
+                _bx = Q["st"].get("export_btn")
+                _cv = Q["stage_cv"]
+                ck(_bx is not None and _bx.winfo_ismapped() and
+                   _bx.winfo_rooty() + _bx.winfo_height() <= _cv.winfo_rooty() +
+                   _cv.winfo_height(),
+                   "done: Export for posting is in view without scrolling")
+                ck(len(Q["steps_box"].winfo_children()) == 1,
+                   "done: the progress checklist folds to one line")
+                root.geometry(_geo0)
+                root.update()
+                _lbls = [x.cget("text") for x in Q["stage"].winfo_children()
+                         if x.winfo_class() == "Label"]
+                ck(any("vertical version" in t for t in _lbls),
+                   "a 16:9 result offers a vertical version for TikTok / Reels")
+                ck(all(any(w_ in b for b in _btns) for w_ in
+                       ("Same characters, new idea", "Another script", "Re-shoot in Final")),
+                   "MORE LIKE THIS: new idea / another script / re-shoot in Final")
+                shot("quick_more")
+                _v0 = sub_.count("video")
+                Q["again"](j, "final")
+                ck(wait(lambda: Q["st"]["job"].get("state") == "done"
+                        and not Q["st"]["busy"], 120) and
+                   Q["st"]["job"]["quality"] == "Final" and sub_.count("video") == _v0 + 4
+                   and os.path.exists(j["final"]),
+                   "Re-shoot in Final: the same 4 shots again at Final; the Draft is kept")
+                _jf = Q["st"]["job"]
+                _btns = [x.cget("text") for fr in Q["stage"].winfo_children()
+                         for x in ([fr] + list(fr.winfo_children()))
+                         if x.winfo_class() == "Button"]
+                ck(not any("Re-shoot" in b for b in _btns), "...a Final run offers no re-shoot")
+                Q["again_idea"](_jf)
+                root.update()
+                ck(Q["st"]["job"] is None and Q["st"]["cast"] == _jf["cast"] and
+                   Q["st"]["fmt"] == _jf["format"] and
+                   not Q["t_idea"].get("1.0", "end").strip(),
+                   "Same characters, new idea: the form filled with that cast, idea box empty")
+                n_done = len([x for x in _q.list_jobs() if x.get("state") == "done"])
+                _song_f = ffm(["-f", "lavfi", "-i", "sine=frequency=500", "-t", "6"],
+                              os.path.join(DATA, "mysong.flac"))
+                Q["from_song"](_song_f, "My Song", "[Verse]\nla la")
+                root.update()
+                ck(Q["st"]["fmt"] == "music" and "your song: My Song" in Q["snd_var"].get()
+                   and "My Song" in Q["t_idea"].get("1.0", "end"),
+                   "Song's VIDEO button: Quick on Music video with your song in place")
+                Q["pick_fmt"]("sketch")
+                ck(Q["st"].get("song") is None, "...another format drops the song")
+                _stale = _q.new_job("left running when the app closed", "sketch")
+                _stale["state"] = "running"
+                _stale["steps"]["cast"] = "running"
+                _q.save(_stale)
+                Q["show_job"](_stale)
+                root.update()
+                _btxt = [x.cget("text") for x in Q["stage"].winfo_children()
+                         if x.winfo_class() == "Button"]
+                ck(Q["st"]["job"]["state"] == "stopped" and any("Carry on" in b for b in _btxt),
+                   "a run left 'running' by a closed app offers Carry on")
+                Q["t_idea"].delete("1.0", "end")
+                Q["t_idea"].insert("1.0", "a guard naps\n- a teacher yells\n\u2022 soup")
+                Q["paint_perline"]()
+                Q["perline_var"].set(True)
+                Q["paint_perline"]()
+                ck(Q["ideas_typed"]() == ["a guard naps", "a teacher yells", "soup"] and
+                   Q["b_go"].cget("text").startswith("Make 3"),
+                   "several lines + 'one video per line' -> 3 ideas, 'Make 3'")
+                Q["perline_var"].set(False)
+                ck(len(Q["ideas_typed"]()) == 1, "unticked: the box is one idea")
+                root.update()
+                ck(not Q["more"].winfo_ismapped() and
+                   "draft quality" in Q["more_sum"].cget("text") and
+                   "1 version" in Q["more_sum"].cget("text") and
+                   "Takes about" in Q["wait_lbl"].cget("text"),
+                   "MORE OPTIONS starts closed and says what the settings are; a line under "
+                   "the button says how long it takes (%r)" % Q["more_sum"].cget("text"))
+                Q["toggle_more"]()
+                root.update()
+                ck(Q["more"].winfo_ismapped(), "...one click opens it")
+                _lt_cb = [w_ for w_ in Q["more"].winfo_children() + sum(
+                    (f_.winfo_children() for f_ in Q["more"].winfo_children()), [])
+                    if w_.winfo_class() == "Checkbutton" and
+                    "Long takes" in str(w_.cget("text"))]
+                ck(Q["long_var"].get() is True and len(_lt_cb) == 1,
+                   "LONG TAKES: a ticked box under More options")
+                _mfile = os.path.join(DATA, "theme.mp3")
+                subprocess.run(["ffmpeg", "-v", "error", "-y", "-f", "lavfi", "-i",
+                                "sine=frequency=262:d=2", _mfile], check=True)
+                _ms = Q["add_music"](_mfile)
+                root.update()
+                _mt = [str(c2.cget("text")) for w_ in Q["mus_box"].winfo_children()
+                       for c2 in ([w_] + list(w_.winfo_children()))
+                       if "text" in c2.keys()]
+                ck(_ms and Q["st"].get("music") == _ms and any("theme" in t for t in _mt) and
+                   "music" in Q["more_sum"].cget("text"),
+                   "MUSIC: + add a song puts it in the library and picks it (%r)" % _mt)
+                Q["st"]["music"] = None
+                ck(Q["weird_var"].get() is False and
+                   "weirdos" not in Q["more_sum"].cget("text"),
+                   "WEIRDOS: off by default (new characters are ordinary people)")
+                _cb = [x for x in Q["cap_box"].winfo_children() if x.winfo_class() != "Canvas"]
+                ck(len(_cb) == 4 and Q["st"]["captions"] == "pop" and
+                   _cb[2].cget("bg") != _cb[0].cget("bg"),
+                   "CAPTIONS: None / Clean / Pop / Big, Pop lit by default")
+                _cb[3].event_generate("<Button-1>")
+                root.update()
+                ck(Q["st"]["captions"] == "big", "clicking Big picks it")
+                _pb = Q["pace_box"].winfo_children()
+                ck(len(_pb) == 4 and _pb[0].cget("bg") != _pb[1].cget("bg"),
+                   "PACE: Snappy / Natural / Let it breathe / Keep every pause, the sketch's "
+                   "Snappy lit")
+                _pb[2].event_generate("<Button-1>")
+                root.update()
+                ck(Q["st"]["pace"] == "breathe", "clicking Let it breathe picks it")
+                Q["pick_fmt"]("confessional")
+                root.update()
+                _pc = Q["pace_box"].winfo_children()
+                ck(Q["st"]["pace"] is None and _pc[2].cget("bg") != _pc[0].cget("bg") and
+                   _pc[0].cget("bg") == _pc[1].cget("bg"),
+                   "another format brings its own pace (a confessional lets it breathe)")
+                Q["pick_fmt"]("music")
+                root.update()
+                _hid = not Q["cap_row"].winfo_ismapped()
+                Q["pick_fmt"]("sketch")
+                root.update()
+                ck(_hid and Q["cap_row"].winfo_ismapped(),
+                   "no CAPTIONS row for a music video; it comes back for a sketch")
+                Q["st"]["captions"] = "pop"
+                Q["t_idea"].delete("1.0", "end")
+                Q["check_var"].set(False)
+                Q["st"]["copies"] = 2
+                Q["go"]()
+                ck(wait(lambda: not Q["st"]["busy"] and not Q["st"]["queue"] and
+                        len([x for x in _q.list_jobs() if x.get("state") == "done"])
+                        == n_done + 2, 120),
+                   "COPIES 2: two videos made one after the other")
+                Q["st"]["copies"] = 1
+                aw = Q["ctx"]["open_app"]("vertical", video=j["final"])
+                ck(aw.ap["st"]["app"] == "vertical" and aw.ap["st"]["video"] == j["final"],
+                   "...which opens Make it vertical with the video picked")
+                # CHECK THESE SHOTS: a flagged take shows with Reroll / it's fine
+                import studio_pipeline as _spq
+                _jf = Q["st"]["job"]
+                _epf = _spq.load_project(_jf["episode"])
+                _epf["shots"][0]["qc"] = {"pid": _epf["shots"][0].get("chosen"),
+                                          "flags": ["looks wrong: test"], "frame": None}
+                _spq.save_project(_epf)
+                Q["show_job"](_jf)
+                root.update()
+                _fr = Q["flag_rows"]()
+                ck(_fr and _fr[0][0] == 1 and _fr[0][1].cget("text") == "Redo this shot" and
+                   _fr[0][1].winfo_exists() and len(_fr) == len(_q.flagged(_jf)),
+                   "CHECK THESE SHOTS: each flagged take is listed with a Reroll button")
+                Q["ok_shot"](1)
+                root.update()
+                ck(1 not in [r_[0] for r_ in Q["flag_rows"]()] and
+                   1 not in [f_[0] for f_ in _q.flagged(_jf)],
+                   "...'it's fine' clears it")
+                # CHANGE IT: re-cut (no new shots) and re-film any shot
+                ck(str(Q["st"]["recut_btn"].cget("state")) == "disabled",
+                   "Re-cut waits until something is changed")
+                Q["st"]["recut"]["captions"] = "big"
+                Q["show_job"](_jf)
+                root.update()
+                ck(str(Q["st"]["recut_btn"].cget("state")) == "normal",
+                   "...picking Big captions turns it on")
+                Q["st"]["show_shots"] = True
+                Q["show_job"](_jf)
+                root.update()
+                ck(len(Q["st"]["shot_rows"]) == len(_q.shot_list(_jf)) > 0 and
+                   Q["st"]["shot_rows"][0][1].cget("text") == "Redo",
+                   "Re-film a shot lists every shot with a Redo button")
+                Q["recut"](Q["st"]["job"])
+                ck(wait(lambda: not Q["st"]["busy"] and
+                        Q["st"]["job"].get("state") == "done", 60) and
+                   _q.load(_jf["id"])["captions"] == "big" and
+                   _spq.load_project(_jf["episode"])["caption_look"] == "big",
+                   "Re-cut cuts it again with the new captions")
+                # FINISH: a sharper copy beside the video; the export uses it
+                Q["st"]["finish_looks"] = ["sharper"]
+                Q["finish"](Q["st"]["job"])
+                ck(wait(lambda: not Q["st"].get("finishing"), 240) and
+                   os.path.exists(Q["st"]["job"].get("finished") or "") and
+                   _q.load(_jf["id"]).get("finished_looks") == ["sharper"],
+                   "Make a finished copy: a sharper copy sits beside the video")
+                _fin_bytes = open(Q["st"]["job"]["finished"], "rb").read()
+                # EXPORT FOR POSTING: one click -> every shape + cover + subtitles in a folder
+                Q["export"](Q["st"]["job"])
+                root.update()
+                ck(str(Q["st"]["export_btn"].cget("state")) == "disabled",
+                   "Export for posting: the button waits while it works")
+                ck(wait(lambda: not Q["st"].get("exporting"), 240) and
+                   (Q["st"].get("export_done") or {}).get("job") == _jf["id"] and
+                   sorted(f_ for f_ in os.listdir(Q["st"]["export_done"]["dir"])
+                          if f_.endswith(".mp4")) and
+                   len([f_ for f_ in os.listdir(Q["st"]["export_done"]["dir"])
+                        if f_.endswith(".mp4")]) == 3 and
+                   not Q["st"]["export_done"]["errors"],
+                   "...then a folder with tall, square and wide (%r)"
+                   % (Q["st"].get("export_done"),))
+                _own = [f_ for f_ in os.listdir(Q["st"]["export_done"]["dir"])
+                        if f_.endswith("_tall.mp4") or f_.endswith("_wide.mp4")]
+                ck(any(open(os.path.join(Q["st"]["export_done"]["dir"], f_), "rb").read()
+                       == _fin_bytes for f_ in _own),
+                   "...the video's own shape in the export is the finished copy")
+                # HOW WAS IT? stars; Back to the previous version (after the re-cut above)
+                Q["show_job"](_jf)
+                root.update()
+                Q["st"]["star_lbls"][3].event_generate("<Button-1>")
+                root.update()
+                ck(_q.load(_jf["id"]).get("rating") == 4 and
+                   Q["st"]["star_lbls"][3].cget("text") == "\u2605" and
+                   Q["st"]["star_lbls"][4].cget("text") == "\u2606",
+                   "How was it? four stars are saved and lit")
+                _old_n = len(_q.load(_jf["id"]).get("old_cuts") or [])
+                Q["undo_recut"](Q["st"]["job"])
+                ck(_old_n >= 1 and len(_q.load(_jf["id"]).get("old_cuts") or []) == _old_n - 1
+                   and _q.load(_jf["id"]).get("redo_cuts"),
+                   "Back to the previous version: the re-cut is undone (and kept)")
+                # Cmd/Ctrl+Return: Make it on the form
+                _gone = []
+                _go0 = Q["go"]
+                Q["st"]["job"] = None
+                Q["st"]["busy"] = False
+                _r = Q["shortcut_go"]()
+                ck(_r == "break" and Q["st"]["job"] is not None,
+                   "Cmd+Return makes it (Ctrl+Return off a Mac)")
+                wait(lambda: not Q["st"]["busy"], 240)
+                Q["show_job"](_jf)
+                root.update()
+                # ALL MY VIDEOS
+                Q["show_history"]()
+                root.update()
+                ck(Q["st"].get("view") == "history" and
+                   len(Q["st"]["hist_rows"]) == len(_q.history()) > 0,
+                   "All my videos lists every finished video (%d)" % len(_q.history()))
+                Q["st"]["hist_entry"].delete(0, "end")
+                Q["st"]["hist_entry"].insert(0, "zzqx nothing")
+                Q["st"]["hist_typed"]()      # (the entry's <KeyRelease>; Xvfb has no focus)
+                ck(wait(lambda: Q["st"]["hist_rows"] == [], 5), "...search narrows it")
+                Q["open_history"](_jf["id"])
+                root.update()
+                ck(Q["st"].get("view") is None and Q["st"]["job"]["id"] == _jf["id"] and
+                   Q["st"]["job"]["state"] == "done", "...and a click opens that video")
+                # PRODUCT -> AD: only on Product ad; a photo + name go into the job
+                w.lift()
+                _f0 = Q["st"]["fmt"]
+                Q["pick_fmt"]("sketch", user=True)
+                root.update()
+                ck(not Q["prod_row"].winfo_ismapped(), "YOUR PRODUCT is hidden on a sketch")
+                Q["pick_fmt"]("ad", user=True)
+                root.update()
+                _pp = os.path.join(DATA, "glow_mug.png")
+                subprocess.run(["ffmpeg", "-v", "error", "-y", "-f", "lavfi", "-i",
+                                "color=c=0x22aa66:s=200x300", "-frames:v", "1", _pp])
+                Q["pick_product"](_pp)
+                root.update()
+                _kw = Q["job_kwargs"]()
+                ck(Q["prod_row"].winfo_ismapped() and _kw.get("product") == _pp and
+                   _kw.get("product_name") == "Glow Mug",
+                   "Product ad: YOUR PRODUCT takes a photo; its name is guessed from the file")
+                Q["st"]["product"] = None
+                Q["pick_fmt"](_f0, user=True)
+                # PAID WORK: one switch, saved app-wide, blocks non-commercial voices
+                import licences as _licq
+                Q["paid_cb"].invoke()
+                root.update()
+                ck(_licq.paid_work() and "PAID WORK" in Q["more_sum"].cget("text"),
+                   "Paid work: the switch is saved and shows in the options summary")
+                Q["paid_cb"].invoke()
+                ck(not _licq.paid_work(), "...and turns off again")
+                # SERIES: a show bible; picking it fills the cast / format / place
+                import series as _srq
+                w.lift()
+                _c0 = list(Q["st"]["cast"])
+                Q["series_form"](None)
+                root.update()
+                _en = Q["st"]["series_ents"]
+                _en["name"].insert("1.0", "Neck Weather")
+                _en["rules"].insert("1.0", "Dale never admits he's wrong\nthe studio is cold")
+                shot("quick_series")
+                _sv = Q["save_series"]()
+                root.update()
+                ck(_sv and _srq.load(_sv["slug"])["cast"] == _c0 and
+                   _srq.load(_sv["slug"])["rules"] == ["Dale never admits he's wrong",
+                                                       "the studio is cold"] and
+                   Q["st"].get("series") == _sv["slug"],
+                   "+ new series saves the bible with the picked cast and picks it")
+                Q["pick_series"](None)
+                Q["st"]["cast"] = []
+                Q["pick_series"](_sv["slug"])
+                root.update()
+                _chips = [x.winfo_children()[0].cget("text") for x in
+                          Q["ser_box"].winfo_children() if x.winfo_class() == "Frame"]
+                ck(Q["st"]["cast"] == _c0 and "Neck Weather" in _chips and
+                   "Episode 1 of Neck Weather" in Q["ser_note"].cget("text"),
+                   "picking the series brings its cast back; 'Episode 1 of ...' (%r)" % _chips)
+                ck(Q["job_kwargs"]().get("series") == _sv["slug"],
+                   "...and the next video is made in it")
+                Q["pick_series"](None)
+                # NIGHT SHIFT: ideas on tonight's list, made unattended, a contact sheet
+                import nightshift as _nsq
+                _nsq.clear()
+                Q["t_idea"].delete("1.0", "end")
+                Q["t_idea"].insert("1.0", "a lighthouse keeper reviews the fog")
+                Q["check_var"].set(True)
+                Q["add_tonight"]()
+                w.lift()
+                root.update()
+                _bgo = Q["b_go"]
+                ck(root.winfo_containing(_bgo.winfo_rootx() + 8, _bgo.winfo_rooty() + 8)
+                   in (_bgo,) + tuple(_bgo.winfo_children()),
+                   "Make it is on top beside the night link (not hidden behind its row)")
+                ck(len(_nsq.items()) == 1 and _nsq.items()[0]["options"]["check"] is False and
+                   _nsq.items()[0]["options"]["fmt"] == Q["st"]["fmt"],
+                   "+ add to tonight's list: the idea goes on the list with the form's "
+                   "options, unattended")
+                Q["show_night"]()
+                root.update()
+                ck(Q["st"].get("view") == "night" and len(Q["st"]["night_rows"]) == 1,
+                   "Tonight lists it")
+                ck(Q["night_at"]("25:99") is False and Q["night_at"]("01:30") is True and
+                   Q["st"]["night_wait"] == "01:30", "a start time is checked and kept")
+                Q["st"]["night_wait"] = None
+                Q["night_start"]()
+                ck(wait(lambda: not Q["st"].get("night_running"), 240) and
+                   _nsq.items() == [] and _nsq.last_night() and
+                   [v["state"] for v in _nsq.last_night()["videos"]] == ["done"] and
+                   os.path.exists(Q["st"].get("night_sheet") or ""),
+                   "Start now: made unattended; last night's sheet is there (%r)"
+                   % ([(v["state"], v.get("error")) for v in
+                       (_nsq.last_night() or {}).get("videos", [])],))
+                w.lift()
+                Q["show_night"]()
+                root.update()
+                shot("quick_night")
+                Q["st"]["view"] = None
+                Q["check_var"].set(False)
+                w.lift()                       # (the Apps tab was opened above)
+                root.update()
+                shot("quick_done")
+                Q["show_history"]()
+                root.update()
+                shot("quick_history")
+                Q["open_history"](_jf["id"])
+                root.update()
+                ew = Q["ctx"]["open_episode"](j["episode"])
+                root.update()
+                ck(ew.ep["st"]["pj"]["slug"] == j["episode"],
+                   "fine-tune: the video opens as an Episode in Studio")
+                dw = Q["ctx"]["open_dialogue"](j["dialogue"])
+                root.update()
+                ck(dw.d2["st"]["pj"]["slug"] == j["dialogue"],
+                   "...and the script as a Dialogue scene")
+                # PICK THE SCRIPT: the drafts side by side on the wide review
+                w.lift()
+                _pj = dict(j, state="review:drafts", room={"game": "soup is weather"},
+                           drafts=[{"title": "Draft %d" % (k_ + 1), "lines": [
+                               {"speaker": "A", "text": "Line one %d." % k_,
+                                "direction": "points"},
+                               {"speaker": "B", "text": "Button %d." % k_}]}
+                               for k_ in range(3)])
+                Q["st"]["job"], Q["st"]["busy"] = _pj, False
+                Q["st"]["form_open"] = False
+                Q["paint_run"]()
+                root.update()
+                _txt = [x.cget("text") for x in Q["stage"].winfo_children()
+                        if x.winfo_class() == "Label"]
+                _ub = Q["st"].get("draft_btns") or []
+                ck(any("Pick the script" in t for t in _txt) and len(_ub) == 3 and
+                   all(b_.winfo_ismapped() for b_ in _ub),
+                   "review:drafts -> three drafts, each with Use this one")
+                ck(len({b_.winfo_rootx() for b_ in _ub}) == 3 and Q["st"].get("wide"),
+                   "...side by side on the whole window")
+                shot("quick_pick")
+            except Exception:
+                traceback.print_exc()
+                fails.append("exception")
+            print("TESTQUICK %s" % ("FAILED" if fails else "done"), flush=True)
+            root.after(300, root.destroy)
+        root.after(1500, _tqk)
+
+    if os.environ.get("FORGE_LAB_TESTCHAR3") == "1":
+        # Characters: the ANGLES sheet and the one-click VOICE, rig faked
+        def _tc3():
+            import scene_engine as _se
+            import dialogue as _dlg
+            import charpack as _cp
+            fails = []
+
+            def ck(cond, label):
+                print("  %-4s %s" % ("ok" if cond else "FAIL", label), flush=True)
+                if not cond:
+                    fails.append(label)
+
+            def wait(cond, secs=30):
+                t0 = time.time()
+                while time.time() - t0 < secs:
+                    root.update()
+                    if cond():
+                        return True
+                    time.sleep(0.05)
+                return False
+
+            def shot(name):
+                d_ = os.environ.get("FORGE_LAB_SHOTDIR")
+                if d_:
+                    root.update()
+                    time.sleep(0.4)
+                    root.update()
+                    subprocess.run(["import", "-window", "root", "-crop", "1440x900+0+0",
+                                    os.path.join(d_, name + ".png")], capture_output=True)
+            g = globals()
+            sent = []
+
+            def fake_submit(kind, p, refs=None):
+                sent.append((kind, dict(p), list(refs or [])))
+                pid = "c3_%d" % len(sent)
+                os.makedirs(os.path.join(RUNS, pid), exist_ok=True)
+                col = "0x%02x6040" % (40 + 25 * (len(sent) % 8))
+                subprocess.run(["ffmpeg", "-v", "error", "-y", "-f", "lavfi", "-i",
+                                "color=c=%s:s=96x160" % col, "-frames:v", "1",
+                                os.path.join(RUNS, pid, "o.png")], capture_output=True)
+                return pid, 7
+            g["submit"] = fake_submit
+            g["run_state"] = lambda pid: {"state": "done"}
+            g["collect"] = lambda pid: {"id": pid, "images": [{"file": "o.png"}]}
+            g["wait_and_collect"] = lambda pid, timeout=1800, poll=3: {
+                "id": pid, "images": [{"file": "o.png"}]}
+            # charpack goes through forge_core -> the IMPORTED forge_lab module (not __main__)
+            _flm = __import__("forge_lab")
+            for _k in ("submit", "run_state", "collect", "wait_and_collect"):
+                setattr(_flm, _k, g[_k])
+            _flm.RUNS = RUNS
+
+            def tone(path):
+                os.makedirs(os.path.dirname(path), exist_ok=True)
+                subprocess.run(["ffmpeg", "-v", "error", "-y", "-f", "lavfi", "-i",
+                                "sine=frequency=260", "-t", "1", path], capture_output=True)
+                return path
+            voiced = []
+
+            def fake_tb(job, out_dir, language="English", engine="qwen"):
+                voiced.append(job)
+                return {"items": [{"id": i["id"], "out": tone(os.path.join(
+                    out_dir, i["id"].replace(":", "_") + ".wav"))}
+                    for i in job["design"] + job["clone"]]}
+            _se.tts_batch = fake_tb
+            try:
+                w = open_character_workspace()
+                h = w.ch2
+                root.geometry("+2000+0")
+                w.geometry("1440x900+0+0")
+                h["new"]()
+                h["tab"]("Angles")
+                root.update()
+                ck(h["b_sheet"].cget("state") == "disabled" and
+                   "still first" in h["ang_head"].cget("text"),
+                   "Angles before a still: says to make one first")
+                h["name_var"].set("Clarence")
+                h["make_still"]()
+                ck(wait(lambda: h["cur"]["still"] and not h["cur"]["busy"]), "a still is made")
+
+                slug = h["cur"]["slug"]
+                # let the editor's own debounced save land FIRST, then write the file behind its
+                # back (a description typed in another window). Without the flush the pending
+                # 800 ms autosave fires whenever it likes and decides which prompt survives —
+                # the assertion below then passes or fails on timing.
+                h["flush"]()
+                write_character(slug, dict(read_character(slug), feature="ears to the chin",
+                                           prompt="He is a weather presenter in his mid-30s"))
+                h["tab"]("Angles")
+                root.update()
+                ck(h["b_sheet"].cget("state") == "normal" and
+                   h["b_sheet"].cget("text") == "Make the sheet", "then Make the sheet is on")
+                n0 = len(sent)
+                h["make_sheet"]()
+                ck(wait(lambda: not h["cur"]["busy"]), "the sheet finishes")
+                built = sent[n0:]
+                ck(len(built) == len(_cp.SHEET_MAIN_KEYS) and
+                   all(k == "edit" and r == [character_still(slug)] for k, _p, r in built),
+                   "6 angles, each an EDIT of the still (%d)" % len(built))
+                ck(all("ears to the chin" in p_["prompt"] for _k, p_, _r in built),
+                   "every angle restates the gag (the Weirdo's own feature)")
+                imgs = [c for c in h["ang_grid"].winfo_children()
+                        if getattr(c.winfo_children()[0], "image", None)]
+                ck(len(imgs) == 6 and "6 angles" in h["ang_head"].cget("text"),
+                   "the tab shows the 6 angles (%d)" % len(imgs))
+                ck(len(_cp.pack_refs(slug)) == 7,
+                   "every video now gets the still + 6 angles as references")
+                shot("angles")
+                n1 = len(sent)
+                h["make_sheet"](["profile-right"], force=True)
+                ck(wait(lambda: not h["cur"]["busy"]) and len(sent) == n1 + 1,
+                   "redo on one angle redraws just that one")
+                # FROM A PHOTO: any picture becomes a character
+                _ph = os.path.join(DATA, "my_photo.png")
+                subprocess.run(["ffmpeg", "-v", "error", "-y", "-f", "lavfi", "-i",
+                                "color=c=0x996655@0.5:s=300x400,format=rgba", "-frames:v", "1",
+                                _ph], capture_output=True)
+                _ps = h["from_photo"](_ph)
+                _pm = read_character(_ps) or {}
+                ck(_ps and _pm.get("name") == "My Photo" and character_still(_ps) and
+                   _pm.get("from_photo") == "my_photo.png",
+                   "From a photo: a saved character whose look is the picture (%r)" % _ps)
+                _sp_ = character_still(_ps)
+                with open(_sp_, "rb") as _fh:
+                    _ct = _fh.read(26)[25]
+                ck(_ct == 2, "...stored flattened to RGB (a transparent PNG can hang Tk)")
+                h["tab"]("Angles")
+                root.update()
+                ck(h["b_sheet"].cget("state") == "normal", "...and Angles can draw them at once")
+                h["open"](slug)
+                h["tab"]("Voice")
+                root.update()
+                ck("no voice yet" in h["vo_head"].cget("text"), "Voice: none yet, says so")
+                h["auto_voice"]()
+                ck(wait(lambda: not h["cur"]["busy"]), "Give them a voice finishes")
+                vs = (read_character(slug) or {}).get("voice_slug")
+                ck(vs and _dlg.load_voice(vs) and "voice:" in h["vo_head"].cget("text"),
+                   "one click: a voice is designed, kept and given to Clarence")
+                ck(voiced and "35-year-old male" in voiced[-1]["design"][0]["instruct"],
+                   "designed from the character: 'mid-30s' -> 35, male (%r)"
+                   % voiced[-1]["design"][0]["instruct"][:60])
+                shot("voice")
+                ck("not defined" not in h["status"].cget("text"),
+                   "...and it plays (%r)" % h["status"].cget("text")[:60])
+                h["name_var"].set("Clarence Voss")       # a real edit -> an autosave
+                h["flush"]()
+                ck((read_character(slug) or {}).get("name") == "Clarence Voss",
+                   "(the edit was saved)")
+                ck((read_character(slug) or {}).get("voice_slug") == vs,
+                   "editing the character afterwards KEEPS the linked voice")
+                h["open_voices"]()
+                root.update()
+                vw = st.get("_voices_win", {}).get("win")
+                ck(vw is not None and vw.vo["st"].get("char") == slug and
+                   vw.vo["st"]["v"].get("slug") == vs,
+                   "Fine-tune opens the Voices page on Clarence's voice")
+                # ---- a long cast scrolls, and FIND narrows it (Ryan couldn't reach Vivian)
+                for _i in range(30):
+                    write_character("extra-%02d" % _i, {"name": "Extra %02d" % _i,
+                                                        "prompt": "x", "picks": {}})
+                write_character("lady-vivian", {"name": "Lady Vivian", "prompt": "x",
+                                                "picks": {}})
+                h["relist"]()
+                root.update()
+                _cv = h["cast_cv"]
+                _sr = [float(v) for v in str(_cv.cget("scrollregion")).split()] or [0, 0, 0, 0]
+                ck(len(h["cast_rows"]) >= 31 and _sr[3] > _cv.winfo_height() + 200,
+                   "a 30-strong cast: the list is taller than its window and scrolls")
+                _cv.yview_moveto(1.0)
+                root.update()
+                ck(_cv.yview()[1] > 0.99 and _cv.yview()[0] > 0.3,
+                   "...down to the last name")
+                # the WHEEL scrolls it inside a tab too (a Frame isn't in its children's
+                # bindtags: dock.py routes the window's wheel binding through the root)
+                w.lift()                       # the Voices tab opened above: back to Characters
+                _cv.yview_moveto(0.0)
+                root.update()
+                _rw = list(h["cast_rows"].values())[3][0]
+                for _k in range(6):
+                    _rw.event_generate("<MouseWheel>", delta=-120, x=5, y=5)
+                root.update()
+                ck(_cv.yview()[0] > 0.0, "the mouse wheel scrolls the cast list (%.2f)"
+                   % _cv.yview()[0])
+                h["find_var"].set("vivi")
+                time.sleep(0.25)               # the list rebuilds once typing pauses (150 ms)
+                root.update()
+                ck(list(h["cast_rows"]) == ["lady-vivian"], "typing 'vivi' finds Lady Vivian")
+                h["find_var"].set("")
+                time.sleep(0.25)
+                root.update()
+                ck(len(h["cast_rows"]) >= 31, "clearing find shows everyone again")
+                _stp = character_still(slug)
+                _t0 = time.time()
+                _a1 = thumb_photo(_stp, 34)
+                _a2 = thumb_photo(_stp, 34)
+                ck(_a1 is not None and _a1 is _a2 and time.time() - _t0 < 0.5,
+                   "thumbnails are cached: the same picture is decoded once, not per repaint")
+                # ---- TWO PRESSES, TWO JOBS (Ryan, 2026-10-22) -------------------------------
+                # "it wont let me generate a new character if one is in progress. it should let
+                # me hit the button and then add it to the queue." The window used to disable the
+                # buttons and refuse the second press; it now counts what is in flight. Hold the
+                # first job open so the second press has something to queue BEHIND.
+                import dispatch as _dsp3
+                _real_render = _dsp3.render
+                _hold = {"n": 0, "go": threading.Event()}
+
+                def _slow_render(title, mode, params, refs, est_s=None, need=None, **_kw):
+                    _hold["n"] += 1
+                    _hold["go"].wait(25)                  # in flight until the test lets it go
+                    return {"id": "slow%d" % _hold["n"], "seed": 7,
+                            "images": [{"file": "o.png"}]}
+
+                _dsp3.render = _slow_render
+                try:
+                    h["new"]()
+                    h["tab"]("Look")
+                    h["t_prompt"].delete("1.0", "end")
+                    h["t_prompt"].insert("1.0", "a test character in a red coat")
+                    h["make_still"]()
+                    ck(wait(lambda: len(h["cur"]["jobs"]) == 1, 10),
+                       "a still starts and the window knows it is in flight")
+                    ck(str(h["buttons"]["still"].cget("state")) == "normal",
+                       "...and Make still is STILL PRESSABLE while it runs")
+                    h["make_still"]()
+                    ck(wait(lambda: len(h["cur"]["jobs"]) == 2, 10),
+                       "a second press is ACCEPTED, not refused (2 in flight)")
+                    ck(str(h["buttons"]["still"].cget("state")) == "normal",
+                       "...and the button is never disabled")
+                    _msg = str(h["status"].cget("text"))
+                    ck("in flight" in _msg or "queued" in _msg,
+                       "the status line says what is queued: %r" % _msg[:64])
+                    _hold["go"].set()
+                    ck(wait(lambda: not h["cur"]["jobs"], 40),
+                       "both land and the window empties again")
+                finally:
+                    _hold["go"].set()
+                    _dsp3.render = _real_render
+                # ---- the INVENT buttons count too (Surprise me / Weirdo) ---------------------
+                # Same principle: press it again while the rig's model is fitting a description
+                # and it invents another — it used to say "still working on the last one".
+                import director as _dir
+                _fit = {"n": 0, "go": threading.Event()}
+                _real_fit = _dir.Director.weirdo_fit
+
+                def _slow_fit(self, desc, vein=None, base=None, action=None):
+                    _fit["n"] += 1
+                    _fit["go"].wait(25)
+                    return {}                      # an empty fit keeps the roll (apply_weirdo_fit)
+
+                _dir.Director.weirdo_fit = _slow_fit
+                try:
+                    h["new"]()
+                    h["t_desc"].delete("1.0", "end")
+                    h["t_desc"].insert("1.0", "a lighthouse keeper who collects radios")
+                    h["surprise"]()
+                    ck(wait(lambda: h["cur"]["fitting"] == 1, 10),
+                       "Surprise me starts fitting the description")
+                    ck(str(h["buttons"]["surprise"].cget("state")) == "normal",
+                       "...and Surprise me is still pressable while it fits")
+                    h["surprise"]()
+                    ck(wait(lambda: h["cur"]["fitting"] == 2, 10),
+                       "a second press is ACCEPTED while the first is fitting (2 in flight)")
+                    _fit["go"].set()
+                    ck(wait(lambda: h["cur"]["fitting"] == 0, 40),
+                       "...and both settle back to none in flight")
+                finally:
+                    _fit["go"].set()
+                    _dir.Director.weirdo_fit = _real_fit
+            except Exception:
+                traceback.print_exc()
+                fails.append("exception")
+            print("TESTCHAR3 %s" % ("FAILED" if fails else "done"), flush=True)
+            root.after(300, root.destroy)
+        root.after(1500, _tc3)
+
+    if os.environ.get("FORGE_LAB_TESTVOICES") == "1":
+        # the VOICES page end to end, rig faked: build -> audition -> keep -> Fish direction
+        # -> test in both engines -> give it to a character -> clone -> reachable from Dialogue
+        def _tvo():
+            import scene_engine as _se
+            import dialogue as _dlg
+            fails = []
+
+            def ck(cond, label):
+                print("  %-4s %s" % ("ok" if cond else "FAIL", label), flush=True)
+                if not cond:
+                    fails.append(label)
+
+            def wait(cond, secs=20):
+                t0 = time.time()
+                while time.time() - t0 < secs:
+                    root.update()
+                    if cond():
+                        return True
+                    time.sleep(0.05)
+                return False
+
+            def tone(path):
+                os.makedirs(os.path.dirname(path), exist_ok=True)
+                subprocess.run(["ffmpeg", "-v", "error", "-y", "-f", "lavfi", "-i",
+                                "sine=frequency=280", "-t", "1", path], capture_output=True)
+                return path
+            sent = []
+
+            def fake_tb(job, out_dir, language="English", engine="qwen"):
+                sent.append((engine, job))
+                return {"items": [{"id": i["id"], "out": tone(os.path.join(
+                    out_dir, i["id"].replace(":", "_") + ".wav"))}
+                    for i in job["design"] + job["clone"]]}
+            _se.tts_batch = fake_tb
+            _se.transcribe_many = lambda paths, language="English": ["my words"] * len(paths)
+            write_character("clarence", {"name": "Clarence", "prompt": "x"})
+            try:
+                _nav_go("Voices")
+                root.update()
+                w = st.get("_voices_win", {}).get("win")
+                V = getattr(w, "vo", None)
+                ck(V is not None and w.title() == "Voices", "the Voices row opens the page")
+                _nav_go("Voices")
+                ck(st["_voices_win"]["win"] is w, "picking it again raises the same window")
+                V["new"]()
+                V["name_var"].set("Clarence")
+                V["acc_var"].set("Minnesotan")
+                V["age_var"].set(38)
+                V["notes_var"].set("breathy, calm urgency")
+                V["changed"]()
+                ck("38-year-old male" in V["desc_lbl"].cget("text") and
+                   "Minnesotan" in V["desc_lbl"].cget("text"),
+                   "the page shows the sentence VoiceDesign will read")
+                V["sample_var"].set("Expect rain.")
+                V["audition"]()
+                ck(wait(lambda: not V["st"]["busy"] and len(V["st"]["aud"]) == 3),
+                   "Audition 3 -> three takes")
+                ck(sent[-1][0] == "qwen" and len(sent[-1][1]["design"]) == 3 and
+                   sent[-1][1]["design"][0]["text"] == "Expect rain.",
+                   "...designed on qwen, reading the sample line")
+                V["keep"](V["st"]["aud"][2])
+                slug = V["st"]["v"].get("slug")
+                ck(slug and _dlg.load_voice(slug) and V["title"].cget("text") == "Clarence",
+                   "Keep: the voice is in the library and open in the builder")
+                V["fishd_var"].set("slow, deadpan")
+                V["changed"]()
+                ck(wait(lambda: (_dlg.load_voice(slug) or {}).get("fish_direction")
+                        == "slow, deadpan", 5),
+                   "a kept voice saves its Fish direction as you type")
+                V["test_var"].set("Your ears are in my soup.")
+                V["test"]()
+                ck(wait(lambda: not V["st"]["busy"] and len(V["st"]["tests"]) == 2),
+                   "Say it in both engines -> a Qwen take and a Fish take")
+                ck([e for e, _j in sent[-2:]] == ["qwen", "fish"] and
+                   sent[-1][1]["clone"][0]["text"] == "[slow, deadpan] Your ears are in my soup.",
+                   "Fish got the voice's direction inline")
+                _txt = " ".join(x.cget("text") for c_ in V["test_res"].winfo_children()
+                                for x in c_.winfo_children() if x.winfo_class() == "Label")
+                ck("non-commercial" in _txt, "the Fish take is labelled non-commercial")
+                V["st"]["char"] = "clarence"
+                V["link"]()
+                ck(read_character("clarence").get("voice_slug") == slug and
+                   "Clarence's voice" in V["link_lbl"].cget("text"),
+                   "Make it their voice: Clarence speaks with it")
+                V["show_clone"]()
+                root.update()
+                ck(V["clonep"].winfo_ismapped(), "Clone from a recording opens its panel")
+                V["cl_path"].set(tone(os.path.join(DATA, "clips", "me.mp3")))
+                V["cl_name"].set("Me")
+                V["clone"]()
+                ck("tick the box" in V["status"].cget("text") and
+                   _dlg.load_voice("me") is None,
+                   "no permission ticked -> nothing is cloned")
+                V["cl_ok"].set(True)
+                V["clone"]()
+                ck(wait(lambda: not V["st"]["busy"] and _dlg.load_voice("me") is not None),
+                   "ticked -> the clone is made")
+                ck((_dlg.load_voice("me") or {}).get("origin") == "clone" and
+                   _dlg.load_voice("me")["moods"]["neutral"]["ref_text"] == "my words" and
+                   V["build"].winfo_ismapped(),
+                   "...its words heard by the rig; the builder shows it")
+                # reachable from Dialogue's step 2
+                dw = open_dialogue_workspace()
+                D = dw.d2
+                D["new"]()
+                D["add_spk"].set("BOB")
+                D["add_txt"].set("Hello.")
+                D["add"]()
+                D["go"]("Voices")
+                root.update()
+                _links = [x for x in D["castp"].winfo_children()
+                          if x.winfo_class() == "Label" and "Voices page" in x.cget("text")]
+                ck(len(_links) == 1, "Dialogue's Voices step links to the Voices page")
+            except Exception:
+                traceback.print_exc()
+                fails.append("exception")
+            print("TESTVOICES %s" % ("FAILED" if fails else "done"), flush=True)
+            root.after(300, root.destroy)
+        root.after(1500, _tvo)
+
+    if os.environ.get("FORGE_LAB_TESTUSEREF") == "1":
+        # USE ▾ on a take: a finished image becomes a reference in the right mode, in one click
+        def _tur():
+            fails = []
+
+            def ck(cond, label):
+                print("  %-4s %s" % ("ok" if cond else "FAIL", label), flush=True)
+                if not cond:
+                    fails.append(label)
+            made = {}
+            for pid_, fn, args in (("useA", "a.png", ["-f", "lavfi", "-i",
+                                                       "color=c=0x806040:s=160x96",
+                                                       "-frames:v", "1"]),
+                                   ("useB", "b.png", ["-f", "lavfi", "-i",
+                                                       "color=c=0x408060:s=160x96",
+                                                       "-frames:v", "1"]),
+                                   ("useV", "v.mp4", ["-f", "lavfi", "-i",
+                                                       "testsrc=size=160x96:rate=12", "-t", "1",
+                                                       "-pix_fmt", "yuv420p"])):
+                os.makedirs(os.path.join(RUNS, pid_), exist_ok=True)
+                made[pid_] = os.path.join(RUNS, pid_, fn)
+                subprocess.run(["ffmpeg", "-v", "error", "-y"] + args + [made[pid_]],
+                               capture_output=True)
+            data = [({"id": k, "label": k, "prompt": "p", "seed": 1, "images": [
+                {"file": os.path.basename(v)}]}, v) for k, v in made.items()]
+            try:
+                render_takes(data)
+                root.update()
+                mbs = [w for w in tinner.winfo_children()
+                       for w in w.winfo_children() for w in w.winfo_children()
+                       if isinstance(w, tk.Menubutton) and w.cget("text").startswith("USE")]
+                ck(len(mbs) == 3, "every take with a file has a USE \u25be button (%d)" % len(mbs))
+
+                def labels(mb):
+                    m = mb._menu
+                    return [m.entrycget(i, "label") for i in range(m.index("end") + 1)
+                            if m.type(i) == "command"]
+                ck("As the character in a video" in labels(mbs[0]) and
+                   "Continue this clip" not in labels(mbs[0]) and
+                   "Continue this clip" in labels(mbs[2]),
+                   "the menu offers the right uses (a clip can be continued, an image can't)")
+                st["refs"] = []
+                kind_var.set("Image"); on_kind(); pick_model("Text to image")
+                ck(use_take(made["useA"], "r2v") and kind_var.get() == "Video"
+                   and st["mode"] == "video" and st.get("video_mode") == "r2v"
+                   and st["refs"] == [made["useA"]],
+                   "image -> 'as the character': Video, H3 r2v, it is ref 1")
+                use_take(made["useB"], "r2v")
+                use_take(made["useB"], "r2v")
+                ck(st["refs"] == [made["useA"], made["useB"]],
+                   "a second still ADDS (r2v takes several); the same one twice is not doubled")
+                ck(use_take(made["useB"], "i2v") and st.get("video_mode") == "i2v"
+                   and st["refs"] == [made["useB"]],
+                   "'as the first frame': H3 i2v with exactly that one image")
+                ck(use_take(made["useA"], "edit") and kind_var.get() == "Image"
+                   and st["mode"] == "edit" and made["useA"] in st["refs"],
+                   "'in an image edit': Edit image with it as a reference")
+                ck(use_take(made["useV"], "cont") and st.get("video_mode") == "cont"
+                   and len(st["refs"]) == 1 and st["refs"][0].endswith("-last.png")
+                   and os.path.exists(st["refs"][0]),
+                   "a clip -> 'continue this clip': its LAST FRAME is the reference")
+                pick_model(model_label("video", video_mode="t2v"))
+                ck(not use_take(made["useA"], "here") and "does not use" in runst.cget("text"),
+                   "'add here' in a mode with no references says so instead of adding")
+                ck(not use_take("/nope/gone.png", "r2v") and "gone" in runst.cget("text"),
+                   "a deleted file is a clear message, not a crash")
+                render_takes(data)
+                root.update()
+                mbs = [w for w in tinner.winfo_children()
+                       for w in w.winfo_children() for w in w.winfo_children()
+                       if isinstance(w, tk.Menubutton) and w.cget("text").startswith("USE")]
+                ck(mbs and all("Make it talk (Apps)" in labels(mb) for mb in mbs),
+                   "USE \u25be also offers the Apps (make it talk / move / outfit / angle)")
+                aw = use_in_app(made["useA"], "talk")
+                ck(aw.ap["st"]["app"] == "talk" and aw.ap["st"]["image"] == made["useA"],
+                   "...which opens Apps on that app with the picture already picked")
+            except Exception:
+                traceback.print_exc()
+                fails.append("exception")
+            print("TESTUSEREF %s" % ("FAILED" if fails else "done"), flush=True)
+            root.after(300, root.destroy)
+        root.after(1500, _tur)
 
     if os.environ.get("FORGE_LAB_TESTREFS") == "1":
         # Exercises the multi-reference list end-to-end: caps per mode/variant, the
@@ -16461,7 +23750,498 @@ BOB holds a dented box: a toaster that was supposed to be a kettle.
 
         root.after(1500, _run2)
 
+    if os.environ.get("FORGE_LAB_TESTPOSTERS") == "1":
+        # Ryan 2026-10-22: "for the videos can you add a thumbnail as a preview"
+        fails7 = []
+
+        def ck7(cond, label):
+            print("  %-4s %s" % ("ok" if cond else "FAIL", label), flush=True)
+            if not cond:
+                fails7.append(label)
+
+        def _run7():
+            try:
+                os.makedirs(RUNS, exist_ok=True)
+                ents = []
+                for n_, kind in enumerate(("clip", "clip", "broken", "still", "short")):
+                    pid = "pv%d" % n_
+                    d_ = os.path.join(RUNS, pid)
+                    os.makedirs(d_, exist_ok=True)
+                    fn = "o.png" if kind == "still" else "o.mp4"
+                    dst = os.path.join(d_, fn)
+                    if kind == "clip":
+                        subprocess.run(["ffmpeg", "-v", "error", "-y", "-f", "lavfi", "-i",
+                                        "testsrc=size=320x568:rate=24", "-t", "2", dst],
+                                       capture_output=True)
+                    elif kind == "short":
+                        subprocess.run(["ffmpeg", "-v", "error", "-y", "-f", "lavfi", "-i",
+                                        "color=c=0x30a050:s=320x568:rate=24", "-frames:v", "3",
+                                        dst], capture_output=True)
+                    elif kind == "still":
+                        subprocess.run(["ffmpeg", "-v", "error", "-y", "-f", "lavfi", "-i",
+                                        "color=c=0x806040:s=320x568", "-frames:v", "1", dst],
+                                       capture_output=True)
+                    else:
+                        open(dst, "wb").write(b"not a video at all")
+                    ents.append({"id": pid, "mode": "t2i" if kind == "still" else "video",
+                                 "video": kind != "still", "prompt": kind, "seed": n_,
+                                 "steps": 12, "started": time.time() - n_, "status": "success",
+                                 "images": [{"file": fn}]})
+                json.dump(ents, open(os.path.join(RUNS, "index.json"), "w"))
+                t0 = time.time()
+                load_takes()
+                while time.time() - t0 < 3 and len(take_rows) < 5:
+                    root.update()
+                    time.sleep(0.02)
+                ck7(len(take_rows) == 5 and "pv0" not in THUMBS and "pv3" in THUMBS,
+                    "the list draws at once; videos wait for their poster (no ffmpeg on the "
+                    "Tk thread)")
+                t0 = time.time()
+                while time.time() - t0 < 30 and not ("pv0" in THUMBS and "pv1" in THUMBS
+                                                     and "pv4" in THUMBS):
+                    root.update()
+                    time.sleep(0.05)
+                ck7(all(p_ in THUMBS for p_ in ("pv0", "pv1", "pv4")),
+                    "...then every playable video gets its poster (incl. a 3-frame clip)")
+                _w, _h = ((THUMBS["pv0"].width(), THUMBS["pv0"].height()) if "pv0" in THUMBS
+                          else (0, 0))
+                ck7(0 < _w < _h <= 190, "a tall clip gives a tall thumbnail (%dx%d)" % (_w, _h))
+                _pd = os.path.join(DATA, "thumbs", "posters")
+                ck7(os.path.isdir(_pd) and len(os.listdir(_pd)) == 3 and
+                    not any(".tmp." in f_ for f_ in os.listdir(_pd)),
+                    "3 posters cached in DATA/thumbs/posters, no temp left (%s)"
+                    % (os.listdir(_pd) if os.path.isdir(_pd) else "-"))
+                ck7("pv2" not in THUMBS and os.path.join(RUNS, "pv2", "o.mp4") in
+                    st.get("_poster_bad", set()), "a broken file stays [video], remembered")
+                _made = st.get("_posters_made", 0)
+                for _ in range(40):
+                    root.update()
+                    time.sleep(0.05)
+                ck7(st.get("_posters_made", 0) == _made and not st.get("_posters_busy"),
+                    "...and does not set off redraw after redraw")
+                _lbl = [c_ for r_ in tinner.winfo_children() for c_ in r_.winfo_children()
+                        if c_.winfo_class() == "Label" and str(c_.cget("image"))]
+                ck7(any(l_.cget("text") == "\u25b6" for l_ in _lbl),
+                    "a \u25b6 sits on the video posters")
+                ck7(os.listdir(os.path.join(RUNS, "pv0")) == ["o.mp4"],
+                    "nothing is written into the take's own folder")
+                _el = os.path.join(DATA, "forge_lab_errors.log")
+                _t7 = open(_el).read() if os.path.exists(_el) else ""
+                ck7("Traceback" not in _t7 and "TclError" not in _t7, "no Tk error logged")
+                _shd7 = os.environ.get("FORGE_LAB_SHOTDIR")
+                if _shd7:
+                    root.geometry("1440x900+0+0")
+                    for _ in range(10):
+                        root.update()
+                        time.sleep(0.05)
+                    subprocess.run(["import", "-window", "root", "-crop", "1440x900+0+0",
+                                    os.path.join(_shd7, "posters.png")], capture_output=True)
+            except Exception:
+                traceback.print_exc()
+                fails7.append("exception")
+            print("TESTPOSTERS %s" % ("FAILED" if fails7 else "done"), flush=True)
+            for f7 in fails7:
+                print("   FAILED: %s" % f7, flush=True)
+            root.destroy()
+
+        root.after(1500, _run7)
+
+    if os.environ.get("FORGE_LAB_TESTBULKDEL") == "1":
+        # Ryan 2026-10-22: "select multiple takes at once to delete ... a little checkbox"
+        fails6 = []
+
+        def ck6(cond, label):
+            print("  %-4s %s" % ("ok" if cond else "FAIL", label), flush=True)
+            if not cond:
+                fails6.append(label)
+
+        def _pump6(sec=1.0):
+            t0 = time.time()
+            while time.time() - t0 < sec:
+                root.update()
+                time.sleep(0.03)
+
+        def _run6():
+            try:
+                os.makedirs(RUNS, exist_ok=True)
+                ents = []
+                for n_ in range(12):
+                    pid = "b%02d" % n_
+                    os.makedirs(os.path.join(RUNS, pid), exist_ok=True)
+                    fn = "o.png" if n_ % 3 else "o.mp4"
+                    open(os.path.join(RUNS, pid, fn), "wb").write(b"x" * 1000)
+                    ents.append({"id": pid, "mode": "t2i" if n_ % 3 else "video",
+                                 "video": not (n_ % 3), "prompt": "take %d" % n_,
+                                 "seed": n_, "steps": 12, "started": time.time() - n_,
+                                 "status": "success",
+                                 "images": [{"file": fn, "bytes": 1000}]})
+                json.dump(ents, open(os.path.join(RUNS, "index.json"), "w"))
+                os.makedirs(os.path.join(DATA, "elsewhere"), exist_ok=True)
+                load_takes()
+                _pump6(1.5)
+                ck6(len(_del_boxes) == 12 and all(b_.cget("text") == "\u2610"
+                                                  for b_, _r in _del_boxes.values()),
+                    "every take has an empty \u2610")
+                ck6(str(bulk_del.cget("state")) == "disabled" and "(0)" in bulk_del.cget("text"),
+                    "DELETE SELECTED starts off (0)")
+                _del_boxes["b01"][0].event_generate("<Button-1>")
+                _del_boxes["b02"][0].event_generate("<Button-1>")
+                _pump6(0.2)
+                ck6(_del_sel() == ["b01", "b02"] and _del_boxes["b01"][0].cget("text") ==
+                    "\u2611" and "(2)" in bulk_del.cget("text") and
+                    str(bulk_del.cget("state")) == "normal", "clicking two ticks two")
+                _del_boxes["b02"][0].event_generate("<Button-1>")
+                ck6(_del_sel() == ["b01"], "clicking again unticks")
+                _del_boxes["b05"][0].event_generate("<Shift-Button-1>")
+                _pump6(0.2)
+                ck6(sorted(_del_sel()) == ["b01", "b02", "b03", "b04", "b05"],
+                    "shift-click ticks the whole run between (%s)" % sorted(_del_sel()))
+                _del_clear()
+                ck6(not _del_sel() and "(0)" in bulk_del.cget("text"), "clear unticks all")
+                _del_all_shown()
+                ck6(len(_del_sel()) == 12 and bulk_all.cget("text").startswith("\u2611"),
+                    "select all shown ticks all 12")
+                _del_all_shown()
+                ck6(not _del_sel(), "...and again unticks them")
+                # a filter drops the ticks you can't see
+                _del_boxes["b00"][0].event_generate("<Button-1>")   # a video
+                _del_boxes["b01"][0].event_generate("<Button-1>")   # a picture
+                kind_btns["Images"].event_generate("<Button-1>")
+                _pump6(1.2)
+                ck6(_del_sel() == ["b01"], "switching to Images drops the ticked video (%s)"
+                    % _del_sel())
+                kind_btns["All"].event_generate("<Button-1>")
+                _pump6(1.2)
+                for p_ in ("b03", "b04"):
+                    _del_boxes[p_][0].event_generate("<Button-1>")
+                dlg = _bulk_delete_ask()
+                root.update()
+                ck6(dlg is not None and "3" in "".join(
+                    w_.cget("text") for w_ in dlg.winfo_children()
+                    if w_.winfo_class() == "Label"), "DELETE SELECTED asks first, naming 3")
+                ck6(len(read_index()) == 12, "...and nothing is gone before the answer")
+                dlg.bulk_really()
+                _pump6(1.5)
+                left6 = {i["id"] for i in read_index()}
+                ck6(left6 == {"b%02d" % n_ for n_ in range(12)} - {"b01", "b03", "b04"},
+                    "the 3 ticked takes are gone from the index, the rest stay")
+                ck6(not any(os.path.exists(os.path.join(RUNS, p_)) for p_ in
+                            ("b01", "b03", "b04")) and os.path.isdir(os.path.join(RUNS, "b02")),
+                    "...and their folders, only theirs")
+                ck6(len(take_rows) == 9 and not _del_sel() and
+                    str(bulk_del.cget("state")) == "disabled", "the list redraws, nothing ticked")
+                ck6(os.path.isdir(os.path.join(DATA, "elsewhere")) and
+                    delete_takes(["../elsewhere"]) == (0, 0) and
+                    os.path.isdir(os.path.join(DATA, "elsewhere")),
+                    "an id that isn't a take deletes nothing outside runs/")
+                _el = os.path.join(DATA, "forge_lab_errors.log")
+                _t6 = open(_el).read() if os.path.exists(_el) else ""
+                ck6("Traceback" not in _t6 and "TclError" not in _t6, "no Tk error logged")
+                _shd6 = os.environ.get("FORGE_LAB_SHOTDIR")
+                if _shd6:
+                    for p_ in ("b05", "b06"):
+                        _del_boxes[p_][0].event_generate("<Button-1>")
+                    root.geometry("1440x900+0+0")
+                    _pump6(0.8)
+                    subprocess.run(["import", "-window", "root", "-crop", "1440x900+0+0",
+                                    os.path.join(_shd6, "bulk.png")], capture_output=True)
+            except Exception:
+                traceback.print_exc()
+                fails6.append("exception")
+            print("TESTBULKDEL %s" % ("FAILED" if fails6 else "done"), flush=True)
+            for f6 in fails6:
+                print("   FAILED: %s" % f6, flush=True)
+            root.destroy()
+
+        root.after(1500, _run6)
+
+    if os.environ.get("FORGE_LAB_TESTKINDS") == "1":
+        # Ryan 2026-10-22: "a filter for recent takes for images, videos, and songs"
+        fails5 = []
+
+        def ck5(cond, label):
+            print("  %-4s %s" % ("ok" if cond else "FAIL", label), flush=True)
+            if not cond:
+                fails5.append(label)
+
+        def _pump5(sec=1.0):
+            t0 = time.time()
+            while time.time() - t0 < sec:
+                root.update()
+                time.sleep(0.03)
+
+        def _run5():
+            try:
+                ents = []
+                # newest first: 150 videos, then 30 pictures, then 5 songs (the songs are all
+                # OLDER than the last 100 takes -- "Songs" must still find them)
+                for n_ in range(185):
+                    if n_ < 150:
+                        m_, f_, v_ = "video", "clip.mp4", True
+                    elif n_ < 180:
+                        m_, f_, v_ = ("t2i" if n_ % 2 else "edit"), "still.png", False
+                    else:
+                        m_, f_, v_ = "song", "yue2_00001_.flac", False
+                    ents.append({"id": "k%03d" % n_, "mode": m_, "label": m_,
+                                 "prompt": "take %d" % n_, "seed": n_, "steps": 12,
+                                 "video": v_, "started": time.time() - n_,
+                                 "status": "success", "images": [{"file": f_}]})
+                ents.append({"id": "knofile", "mode": "wan", "video": True, "prompt": "x",
+                             "started": time.time() - 999, "status": "error"})
+                os.makedirs(RUNS, exist_ok=True)
+                json.dump(ents, open(os.path.join(RUNS, "index.json"), "w"))
+                ck5([take_kind(e) for e in (ents[0], ents[151], ents[182], ents[-1])] ==
+                    ["video", "image", "song", "video"], "each take knows its kind")
+                ck5(len(filter_kind(ents, "Songs")) == 5 and
+                    len(filter_kind(ents, "Images")) == 30 and
+                    len(filter_kind(ents, "Videos")) == 151 and
+                    len(filter_kind(ents, "All")) == 186, "filter_kind counts")
+                ck5(list(kind_btns) == ["All", "Images", "Videos", "Songs"],
+                    "chips: All / Images / Videos / Songs")
+                for _k, _n in (("All", 100), ("Videos", 100), ("Images", 30), ("Songs", 5)):
+                    kind_btns[_k].event_generate("<Button-1>")
+                    _pump5(1.2)
+                    ck5(len(take_rows) == _n, "%s shows %d (got %d)" % (_k, _n, len(take_rows)))
+                ck5(str(kind_btns["Songs"].cget("bg")) == C["ink"] and
+                    str(kind_btns["All"].cget("bg")) == C["panel2"], "the picked chip is lit")
+                ck5("5 of 5 songs" in takes_hdr.cget("text"), "the header says songs (%r)"
+                    % takes_hdr.cget("text")[:30])
+                ck5(current_settings().get("take_kind") == "Songs",
+                    "the choice is remembered between launches")
+                takes_filter_var.set("★ only")
+                _refilter_takes()
+                _pump5(1.0)
+                ck5(len(take_rows) == 0 and "No takes match" in " ".join(
+                    w_.cget("text") for w_ in tinner.winfo_children()
+                    if w_.winfo_class() == "Label"), "kind and rating combine (no ★ songs)")
+                takes_filter_var.set("All")
+                kind_btns["All"].event_generate("<Button-1>")
+                _pump5(1.0)
+                ck5(len(take_rows) == 100, "back to All: 100")
+                _el = os.path.join(DATA, "forge_lab_errors.log")
+                _t5 = open(_el).read() if os.path.exists(_el) else ""
+                ck5("Traceback" not in _t5 and "TclError" not in _t5, "no Tk error logged")
+            except Exception:
+                traceback.print_exc()
+                fails5.append("exception")
+            print("TESTKINDS %s" % ("FAILED" if fails5 else "done"), flush=True)
+            for f5 in fails5:
+                print("   FAILED: %s" % f5, flush=True)
+            root.destroy()
+
+        root.after(1500, _run5)
+
+    if os.environ.get("FORGE_LAB_TESTCHARDEL") == "1":
+        # Ryan 2026-10-22: "need an option to delete characters" -- ✕ on every cast row.
+        fails4 = []
+
+        def ck4(cond, label):
+            print("  %-4s %s" % ("ok" if cond else "FAIL", label), flush=True)
+            if not cond:
+                fails4.append(label)
+
+        def _pump4(sec=0.5):
+            t0 = time.time()
+            while time.time() - t0 < sec:
+                root.update()
+                time.sleep(0.03)
+
+        def _run4():
+            try:
+                for s_, n_ in (("alma", "Alma"), ("bertram", "Bertram"), ("cosima", "Cosima")):
+                    write_character(s_, {"name": n_, "prompt": "a person called %s" % n_})
+                w4 = open_character_workspace()
+                _pump4(1.0)
+                H = w4.ch2
+                ck4(set(H["cast_x"]) == {"alma", "bertram", "cosima"},
+                    "every cast row has a \u2715 (%s)" % sorted(H["cast_x"]))
+                # Ryan 2026-10-22: "make the left bar ... scrollable, I can barely see the your
+                # cast section" -- on a short window the WHOLE column scrolls to the cast.
+                root.geometry("1240x560+0+0")
+                w4.lift()
+                _pump4(0.8)
+                _cv4 = H["cast_cv"]
+                _sr4 = [float(v) for v in str(_cv4.cget("scrollregion")).split()] or [0] * 4
+                ck4(_sr4[3] > _cv4.winfo_height() + 50,
+                    "on a short window the left column is taller than its space and scrolls "
+                    "(%d vs %d)" % (_sr4[3], _cv4.winfo_height()))
+                _cv4.yview_moveto(1.0)
+                _pump4(0.3)
+                _r4 = H["cast_rows"]["cosima"][0]
+                _top4 = _r4.winfo_rooty() - _cv4.winfo_rooty()
+                ck4(0 <= _top4 and _top4 + _r4.winfo_height() <= _cv4.winfo_height(),
+                    "...scrolled down, the last cast row is fully on screen (y %d)" % _top4)
+                _cv4.yview_moveto(0.0)
+                _pump4(0.2)
+                for _k in range(8):
+                    _r4.winfo_toplevel()
+                    H["nav"].event_generate("<MouseWheel>", delta=-120, x=5, y=5)
+                _pump4(0.3)
+                ck4(_cv4.yview()[0] > 0.0, "the wheel over the tools scrolls the column (%.2f)"
+                    % _cv4.yview()[0])
+                _shd4 = os.environ.get("FORGE_LAB_SHOTDIR")
+                if _shd4:
+                    _cv4.yview_moveto(0.55)
+                    _pump4(0.5)
+                    subprocess.run(["import", "-window", "root", "-crop", "1240x560+0+0",
+                                    os.path.join(_shd4, "cast_scroll.png")],
+                                   capture_output=True)
+                root.geometry("1440x900+0+0")
+                _pump4(0.5)
+                H["open"]("bertram")
+                _pump4(0.5)
+                H["cast_x"]["alma"].event_generate("<Button-1>")
+                _pump4(0.3)
+                ck4(read_character("alma") is not None and
+                    H["cast_x"]["alma"].cget("text") == "Delete?",
+                    "one click only arms it (Delete?)")
+                H["cast_x"]["alma"].event_generate("<Button-1>")
+                _pump4(0.5)
+                ck4(read_character("alma") is None and "alma" not in H["cast_rows"],
+                    "a second click deletes a character that is NOT open")
+                ck4(H["cur"]["slug"] == "bertram" and H["name_var"].get() == "Bertram",
+                    "...and the open one stays open")
+                H["name_var"].set("Bertram B")         # an edit with an autosave pending
+                _pump4(0.1)
+                H["row_delete"]("bertram")
+                H["row_delete"]("bertram")
+                _pump4(1.5)                            # past the 800 ms autosave
+                ck4(read_character("bertram") is None and not os.path.isdir(char_dir("bertram")),
+                    "deleting the OPEN character removes it, and no autosave brings it back")
+                ck4(H["cur"]["slug"] is None and H["name_var"].get() == "",
+                    "...and the editor is a fresh character")
+                ck4(sorted(H["cast_rows"]) == ["cosima"], "the list shows who is left (%s)"
+                    % sorted(H["cast_rows"]))
+                H["open"]("cosima")
+                _pump4(0.3)
+                H["delete"]()
+                H["delete"]()
+                _pump4(0.5)
+                ck4(read_character("cosima") is None, "Advanced \u2192 Delete\u2026 still works")
+                _el = os.path.join(DATA, "forge_lab_errors.log")
+                _t4 = open(_el).read() if os.path.exists(_el) else ""
+                ck4("Traceback" not in _t4 and "TclError" not in _t4, "no Tk error logged")
+            except Exception:
+                traceback.print_exc()
+                fails4.append("exception")
+            print("TESTCHARDEL %s" % ("FAILED" if fails4 else "done"), flush=True)
+            for f4 in fails4:
+                print("   FAILED: %s" % f4, flush=True)
+            root.destroy()
+
+        root.after(1500, _run4)
+
+    if os.environ.get("FORGE_LAB_TESTFAVS") == "1":
+        # Ryan 2026-10-22: Takes shows the last 100 (was 40), and ♥ SAVED PROMPTS.
+        # FORGE_LAB_DATA=<tmp> FORGE_LAB_NOAUTOSAVE=1 — his real index is never touched.
+        fails3 = []
+
+        def ck3(cond, label):
+            print("  %-4s %s" % ("ok" if cond else "FAIL", label), flush=True)
+            if not cond:
+                fails3.append(label)
+
+        def _pump3(sec=1.0):
+            t0 = time.time()
+            while time.time() - t0 < sec:
+                root.update()
+                time.sleep(0.03)
+
+        def _run3():
+            try:
+                os.makedirs(RUNS, exist_ok=True)
+                ents = [{"id": "fav%03d" % n_, "mode": "t2i", "label": "Image",
+                         "prompt": "a lighthouse keeper number %d, oil painting" % n_,
+                         "seed": n_, "steps": 12, "started": time.time() - n_,
+                         "status": "success"} for n_ in range(120)]
+                json.dump(ents, open(os.path.join(RUNS, "index.json"), "w"))
+                load_takes()
+                _pump3(2.0)
+                ck3(len(take_rows) == 100, "Takes shows the last 100 (got %d)" % len(take_rows))
+                ck3(len(_fav_btns) == 100, "every take with a prompt has a \u2665 (%d)"
+                    % len(_fav_btns))
+                # ---- ♥ SAVE PROMPT under the box
+                prompt.delete("1.0", "end")
+                fav_save_btn.invoke()
+                ck3(not fav_list() and "empty" in fav_msg.cget("text"),
+                    "saving an empty box says so and saves nothing")
+                prompt.insert("1.0", "a foggy harbour at dawn, brass and rust")
+                fav_save_btn.invoke()
+                fav_save_btn.invoke()          # the same text twice is ONE entry
+                ck3([d["prompt"] for d in fav_list()] ==
+                    ["a foggy harbour at dawn, brass and rust"] and
+                    os.path.exists(os.path.join(DATA, "saved_prompts.json")),
+                    "\u2665 SAVE PROMPT keeps it on disk, once")
+                ck3("(1)" in fav_open_btn.cget("text"), "the button counts them (%s)"
+                    % fav_open_btn.cget("text"))
+                # ---- ♥ on a take
+                b0, p0 = _fav_btns[3]
+                b0.invoke()
+                _pump3(0.3)
+                ck3(fav_list()[0]["prompt"] == p0 and fav_list()[0]["source"] == "fav003",
+                    "\u2665 on a take saves that take's prompt")
+                ck3(str(b0.cget("bg")) == C["rust_deep"], "...and the \u2665 lights up")
+                load_takes()
+                _pump3(1.0)
+                b0b = next(b_ for b_, p_ in _fav_btns if p_ == p0)
+                ck3(str(b0b.cget("bg")) == C["rust_deep"], "...and stays lit after a reload")
+                # ---- the list: search, use, revert, remove
+                prompt.delete("1.0", "end")
+                prompt.insert("1.0", "what I was writing")
+                w3 = open_saved_prompts()
+                root.update()
+                F3 = w3.fv
+                ck3(F3["lb"].size() == 2, "SAVED PROMPTS lists both (%d)" % F3["lb"].size())
+                F3["q"].set("harbour")
+                F3["paint"]()
+                ck3(F3["lb"].size() == 1 and "harbour" in F3["lb"].get(0),
+                    "search narrows it (%r)" % F3["lb"].get(0))
+                F3["lb"].selection_set(0)
+                F3["lb"].event_generate("<<ListboxSelect>>")
+                root.update()
+                ck3("brass and rust" in F3["full"].get("1.0", "end"),
+                    "picking one shows it in full")
+                got = F3["use"]()
+                ck3(prompt.get("1.0", "end").strip() == "a foggy harbour at dawn, brass and rust"
+                    and got and not w3.winfo_viewable(), "USE IT puts it in the prompt box")
+                do_revert()
+                ck3(prompt.get("1.0", "end").strip() == "what I was writing",
+                    "REVERT brings back what was in the box")
+                w3b = open_saved_prompts()
+                ck3(w3b is w3, "opening it again raises the same window")
+                F3["q"].set("")
+                F3["paint"]()
+                F3["lb"].selection_clear(0, "end")
+                F3["lb"].selection_set(0)
+                F3["remove"]()
+                ck3(len(fav_list()) == 1 and F3["lb"].size() == 1,
+                    "REMOVE deletes it (%d left)" % len(fav_list()))
+                b0c = next(b_ for b_, p_ in _fav_btns if p_ == p0)
+                ck3(str(b0c.cget("bg")) != C["rust_deep"], "...and the take's \u2665 goes dark")
+                _el = os.path.join(DATA, "forge_lab_errors.log")
+                _t3 = open(_el).read() if os.path.exists(_el) else ""
+                ck3("Traceback" not in _t3 and "TclError" not in _t3, "no Tk error logged")
+                _shd = os.environ.get("FORGE_LAB_SHOTDIR")
+                if _shd:
+                    F3["paint"]()
+                    w3.deiconify()
+                    w3.geometry("760x560+700+60")
+                    root.geometry("1400x900+0+0")
+                    _pump3(1.0)
+                    subprocess.run(["import", "-window", "root", "-crop", "1500x900+0+0",
+                                    os.path.join(_shd, "favs.png")], capture_output=True)
+            except Exception:
+                traceback.print_exc()
+                fails3.append("exception")
+            print("TESTFAVS %s" % ("FAILED" if fails3 else "done"), flush=True)
+            for f3 in fails3:
+                print("   FAILED: %s" % f3, flush=True)
+            root.destroy()
+
+        root.after(1500, _run3)
+
     _btn_colors(root)            # dark text, light fill: readable whatever macOS does
+    _paint_kind()                # ...then the kind chip that is ON reads as on again
 
     root.mainloop()
 
@@ -16493,7 +24273,7 @@ def selftest():
          "resolution": 1024, "steps": 25, "seed": -1, "prefix": "forge_lab_selftest",
          "width": 1024, "height": 1024}
     print("estimate %.1fs" % estimate_seconds("edit", p, tpath))
-    pid, seed = submit("edit", p, tpath)
+    pid, seed = submit("edit", p, [tpath])   # a LIST: submit() iterates ref_paths
     print("submitted", pid, "seed", seed)
     t0 = time.time()
     while time.time() - t0 < 420:

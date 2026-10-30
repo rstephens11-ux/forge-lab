@@ -151,7 +151,7 @@ def main():
     posted = {}
     _ids = {"n": 0}
 
-    def _fake_post(path, obj, timeout=60):
+    def _fake_post(path, obj, timeout=60, base=None):
         posted.update(obj)
         _ids["n"] += 1
         return {"prompt_id": "song-test-pid-%d" % _ids["n"]}
@@ -183,8 +183,8 @@ def main():
         "outputs": {"8": {"audio": [
             {"filename": "song_test_00001.flac", "subfolder": "songs", "type": "output"}]}},
         "status": {"status_str": "success", "messages": []}}}
-    fl.get_json = lambda path, timeout=30: (fake_hist if path.startswith("/history") else {})
-    fl.get_bytes = lambda path, timeout=180: b"AUDIO-BYTES-0123456789"
+    fl.get_json = lambda path, timeout=30, base=None: (fake_hist if path.startswith("/history") else {})
+    fl.get_bytes = lambda path, timeout=180, base=None: b"AUDIO-BYTES-0123456789"
     meta = fl.collect(_pid)
     ck(meta is not None and not meta.get("error"), "collect() did not error (%r)" % (meta or {}).get("error"))
     got = [f for f in (meta or {}).get("images", []) if f["file"] == "song_test_00001.flac"]
@@ -274,12 +274,12 @@ def main():
     _pid3 = "cover-test-pid"
     fl._index_insert({"id": _pid3, "mode": "song", "label": "Song · cover", "prefix": "covers/yue2",
                       "started": 1.0, "status": "running", "images": []})
-    fl.get_json = lambda path, timeout=30: ({_pid3: {
+    fl.get_json = lambda path, timeout=30, base=None: ({_pid3: {
         "outputs": {"8": {"audio": [{"filename": "yue2_00001.flac", "subfolder": "covers",
                                      "type": "output"}]},
                     "44": {"text": ["X:1\nK:C\nV: Vocal\ncdef gag2|\n"]}},
         "status": {"status_str": "success", "messages": []}}} if path.startswith("/history") else {})
-    fl.get_bytes = lambda path, timeout=180: b"COVER-AUDIO"
+    fl.get_bytes = lambda path, timeout=180, base=None: b"COVER-AUDIO"
     m3 = fl.collect(_pid3) or {}
     tf = m3.get("text_files") or []
     ck(len(tf) == 1, "the score was written out as a text file (%r)" % tf)

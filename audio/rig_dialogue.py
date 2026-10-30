@@ -11,9 +11,9 @@ Usage:
 
 Where job.json:
   {"design": [{"id": "d1", "instruct": "...", "text": "...", "out": "d1.wav"}],
-   "clone": [{"id": "c1", "voice": "alice", "text": "...", "out": "c1.wav"},
-             {"id": "c2", "voice": "alice", "text": "...", "out": "c2.wav"}],
-   "voices": {"alice": {"ref_wav": "alice_neutral.wav", "ref_text": "..."}},
+   "clone": [{"id": "c1", "voice": "avery", "text": "...", "out": "c1.wav"},
+             {"id": "c2", "voice": "avery", "text": "...", "out": "c2.wav"}],
+   "voices": {"avery": {"ref_wav": "avery_neutral.wav", "ref_text": "..."}},
    "language": "English"}
 
 Outputs ONE json line:

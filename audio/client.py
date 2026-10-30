@@ -28,17 +28,24 @@ import subprocess
 import tempfile
 import uuid
 
-HOST = "ryan@forge"
+HOST = "name@forge"
 RIG_DIR = "/home/ryan/forge-lab-audio"
 JOBS_ROOT = "/tmp/forge-audio"
 
 # Two venvs because qwen-tts (transformers==4.57.3) and qwen-asr (==4.57.6) cannot coexist.
 VENV_TTS = "/home/ryan/qwen-audio/tts/.venv/bin/python"
 VENV_ASR = "/home/ryan/qwen-audio/asr/.venv/bin/python"
+# A THIRD venv: fish-speech pins its own torch/deps and shares nothing with either.
+VENV_FISH = "/home/ryan/fish-speech/.venv/bin/python"
+# Drama 3 int4 is NOT a one-shot model: it runs as the SGLang-Omni HTTP server, and
+# rig_drama3.py is a stdlib-only client for it. Its venv is only the interpreter that runs the
+# script (the weights live in the server process, which owns card 1).
+VENV_DRAMA3 = "/home/ryan/sglang-omni/.venv/bin/python"
 
 _HERE = os.path.dirname(os.path.abspath(__file__))
 RIG_SCRIPTS = ("rig_tts.py", "rig_align.py", "rig_asr.py",
-               "rig_dialogue.py", "rig_asr_batch.py")
+               "rig_dialogue.py", "rig_asr_batch.py", "rig_fish.py",
+               "rig_drama3.py")
 
 _DEPLOYED = False
 
@@ -119,6 +126,23 @@ def _ensure_deployed():
         deploy()
 
 
+def _room(kind, card=1):
+    """Ask the card manager (cards.py) for room on `card` before a model loads there. Only
+    when the APP turned it on (never on the rig / in tools); raises cards.CardBusy — a plain
+    sentence naming what is working there — instead of a CUDA OOM traceback.
+
+    `card` is 0 for Drama 3 (its engine takes card 1 and nothing else can share it); every
+    other voice engine loads on card 2."""
+    if _local():
+        return
+    try:
+        import cards
+    except Exception:
+        return
+    if cards.enabled():
+        cards.preflight(kind, card=card)
+
+
 def _job_dir():
     jid = uuid.uuid4().hex
     remote = "%s/%s" % (JOBS_ROOT, jid)
@@ -152,11 +176,11 @@ def _remote_tts_cmd(job_remote, venv_python, argv):
         shlex.quote(job_remote), venv_python, RIG_DIR, "rig_tts.py", quoted)
 
 
-def _remote_dialogue_cmd(job_remote, venv_python, argv):
-    """Build the remote command for rig_dialogue.py batch TTS run."""
+def _remote_batch_cmd(job_remote, venv_python, script_name, argv):
+    """Build the remote command for a batch rig script (rig_dialogue.py / rig_fish.py)."""
     quoted = " ".join(shlex.quote(a) for a in argv)
     return "cd %s && CUDA_VISIBLE_DEVICES=1 %s %s/%s %s" % (
-        shlex.quote(job_remote), venv_python, RIG_DIR, "rig_dialogue.py", quoted)
+        shlex.quote(job_remote), venv_python, RIG_DIR, script_name, quoted)
 
 
 def _remote_asr_batch_cmd(job_remote, argv):
@@ -181,6 +205,7 @@ def _remote_asr_cmd(job_remote, argv):
 def tts_design(desc, text, out_path, language="English"):
     """Design a voice from a text description and speak `text`. Writes `out_path`."""
     _ensure_deployed()
+    _room("voice")
     argv = ["--design", desc, "--text", text, "--language", language, "--out", "out.wav"]
     if _local():
         job = _local_job_dir()
@@ -209,6 +234,7 @@ def tts_design(desc, text, out_path, language="English"):
 def tts_clone(ref_wav, ref_text, text, out_path, language="English"):
     """Clone the voice in `ref_wav` (with its transcript `ref_text`) and speak `text`."""
     _ensure_deployed()
+    _room("voice")
     if _local():
         job = _local_job_dir()
         try:
@@ -260,6 +286,7 @@ def _parse_words(raw):
 def align(wav, text, language="English"):
     """Return [{'word','start','end'}, ...] for `wav` against transcript `text`."""
     _ensure_deployed()
+    _room("align")
     if _local():
         job = _local_job_dir()
         try:
@@ -303,6 +330,7 @@ def align(wav, text, language="English"):
 def transcribe(wav, language="English"):
     """Return the transcript text Qwen3-ASR hears in `wav` (intelligibility check)."""
     _ensure_deployed()
+    _room("align")
     if _local():
         job = _local_job_dir()
         try:
@@ -337,20 +365,41 @@ def _ref_name(i, path):
     return "ref%02d_%s" % (i, os.path.basename(path))
 
 
-def tts_batch(job, out_dir, language="English"):
+def tts_batch(job, out_dir, language="English", engine="qwen"):
     """Run a batch TTS job on the rig.
 
     Args:
         job: dict with design/clone/voices per rig_dialogue.py protocol.
         out_dir: local directory where output wavs are written.
         language: default language (overridden per job dict if present).
+        engine: "qwen" (Qwen3-TTS, the default), "fish" (Fish Audio S2-Pro) or "drama3"
+            (Drama 3 int4 via the SGLang-Omni server). The job protocol is the SAME for all
+            three — only the rig script and its venv change. ⚠️ A "design" item is meaningless
+            to fish and drama3 (neither has a VoiceDesign): send designs with engine="qwen".
+            ⚠️ drama3 does not load in-process: rig_drama3.py starts the server, renders, and
+            stops it again (releasing card 1) unless one was already up.
 
     Returns:
         The parsed rig JSON (dict). Successful items have ``out`` rewritten to
         a local absolute path inside ``out_dir``. Items with errors keep the
         original rig response (no ``out`` or with an ``error`` key).
     """
+    try:                                   # the "paid work" switch: no non-commercial voices
+        import licences as _lic
+    except ImportError:
+        _lic = None
+    if _lic is not None:
+        _lic.check(engine)
     _ensure_deployed()
+    if engine == "drama3":
+        _room("drama3", card=0)
+        rig_script, venv = "rig_drama3.py", VENV_DRAMA3
+    elif engine == "fish":
+        _room("fish")
+        rig_script, venv = "rig_fish.py", VENV_FISH
+    else:
+        _room("voice")
+        rig_script, venv = "rig_dialogue.py", VENV_TTS
     job = json.loads(json.dumps(job))  # deep copy: never rewrite the CALLER's ref paths
     job.setdefault("language", language)
     voices = job.get("voices", {})
@@ -369,7 +418,7 @@ def tts_batch(job, out_dir, language="English"):
             with open(jpath, "w", encoding="utf-8") as f:
                 json.dump(job, f, ensure_ascii=False)
             argv = ["--job", "job.json"]
-            p = _run_local(VENV_TTS, "rig_dialogue.py", argv, jd)
+            p = _run_local(venv, rig_script, argv, jd)
             info = _parse_json_line(p.stdout)
             if not info.get("ok"):
                 raise RuntimeError("rig dialogue failed: %s" % info.get("error", info))
@@ -402,7 +451,7 @@ def tts_batch(job, out_dir, language="English"):
                 shutil.rmtree(jpath, ignore_errors=True)
             # Run
             argv = ["--job", "job.json"]
-            cmd = _remote_dialogue_cmd(remote, VENV_TTS, argv)
+            cmd = _remote_batch_cmd(remote, venv, rig_script, argv)
             p = _ssh(cmd)
             info = _parse_json_line(p.stdout)
             if not info.get("ok"):
@@ -449,6 +498,7 @@ def transcribe_many(paths, language="English"):
         list[str] of transcripts, same order as ``paths``.
     """
     _ensure_deployed()
+    _room("align")
 
     def _local_impl():
         jd = _local_job_dir()

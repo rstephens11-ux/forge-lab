@@ -196,7 +196,7 @@ def extract_frame(video, frac, out):
 # QC — Director reads a mid frame against the character still; ONE re-roll if not ok
 # ---------------------------------------------------------------------------
 # ⚠️ RANKING, so a re-roll can only ever be a TRADE UP. The old code kept the re-roll
-# unconditionally, which shipped a KNOWN-BROKEN take: on the 2026-10-07 batch, one character's take #3
+# unconditionally, which shipped a KNOWN-BROKEN take: on the 2026-10-07 batch, ludvig #3
 # shot 6 read "broken" before the re-roll and "broken" again after it — and the second,
 # equally-broken take was the one that got used. A re-roll that is no better must revert.
 _QC_RANK = {"ok": 0, "drift": 1, "broken": 2, "no-clip": 2, "no-frame": 2,

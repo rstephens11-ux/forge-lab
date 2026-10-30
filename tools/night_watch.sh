@@ -5,7 +5,7 @@
 # other ending: the runner dying, the service going inactive, or the queue draining without the
 # briefs ever finishing. Without it, a silent failure would look like a 9-hour wait.
 set -u
-HOST="${FORGE_SSH:-ryan@forge}"
+HOST="${FORGE_SSH:-name@forge}"
 DATA="${FORGE_STUDIO_DATA:-/home/ryan/forge-studio-data}"
 POLL="${NIGHT_WATCH_POLL_S:-120}"
 

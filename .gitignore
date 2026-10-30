@@ -47,3 +47,7 @@ episodes/test*/
 # versioning: it is the identity block + seed + LoRA), DROP the still (media, re-pickable).
 characters/**/*.png
 characters/**/*.jpg
+
+# writer API keys (machine room WRITER) - never commit
+writer_keys.json
+comfy_proxy_token

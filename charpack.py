@@ -44,6 +44,7 @@ import time
 
 import forge_core as core
 import forge_lab as fl
+import dispatch as _dsp          # the rig's queue (Tk-free): every render waits its turn
 from director import Director
 from audio import client as audio
 
@@ -143,7 +144,7 @@ def absurd_feature(meta):
                     return ph
         except Exception:
             continue
-    feat = (picks.get("Feature") or "").strip()
+    feat = (picks.get("Feature") or meta.get("feature") or "").strip()
     if feat:
         return feat
     note = (meta.get("note") or "").strip()
@@ -319,8 +320,10 @@ def build_sheet(slug, views=None, scale="Fast", seed=None, on_progress=None, for
         w, h = fl.char_still_size(view["framing"], scale)
         p = {"prompt": prompt, "steps": 25, "seed": vs, "prefix": "charpack",
              "custom_size": True, "width": w, "height": h}
-        pid, used_seed = core.submit("edit", p, [hero])
-        m = core.wait_and_collect(pid, timeout=1800)
+        # through the QUEUE (2026-10-22): a character view waits for a card like anything else
+        m = _dsp.render("Character — %s (%s)" % (slug or "?", key), "edit", dict(p), [hero],
+                        need="image", est_s=45)
+        pid = m.get("id")
         files = [f for f in (m.get("images") or [])
                  if (f.get("file") or "").lower().endswith((".png", ".jpg", ".jpeg", ".webp"))]
         if not files:
@@ -329,7 +332,8 @@ def build_sheet(slug, views=None, scale="Fast", seed=None, on_progress=None, for
         src = os.path.join(core.RUNS, pid, files[0]["file"])
         store_png(src, fpath)
         out_views.append({"key": key, "file": fname, "pid": pid,
-                          "seed": int(used_seed), "prompt": prompt})
+                          "seed": int(m.get("seed") if m.get("seed") is not None else vs),
+                          "prompt": prompt})
         built += 1
         if on_progress:
             on_progress(i, key, "built")

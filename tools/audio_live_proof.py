@@ -127,7 +127,7 @@ def main():
     with open(os.path.join(args.out, "proof.json"), "w") as f:
         json.dump(results, f, indent=2)
 
-    print("\n===== SUMMARY =====")
+    print("\n===== SUMROBIN =====")
     print(json.dumps({k: results[k] for k in
         ("design", "clone", "align_line1", "align_line2", "asr",
          "gpu1_peak_mib", "gpu1_after_mib", "durations_s")}, indent=2))

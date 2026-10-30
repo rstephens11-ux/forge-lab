@@ -13,7 +13,7 @@ set -euo pipefail
 HERE="$(cd "$(dirname "$0")" && pwd)"          # .../overnight
 REPO="$(dirname "$HERE")"                       # the worktree root
 
-HOST="${FORGE_SSH:-ryan@forge}"
+HOST="${FORGE_SSH:-name@forge}"
 REMOTE_CODE="${FORGE_STUDIO_CODE:-/home/ryan/forge-studio}"
 REMOTE_DATA="${FORGE_STUDIO_DATA:-/home/ryan/forge-studio-data}"
 CHAR_SRC="${CHARACTERS_SRC:-$HOME/forge-lab/characters}"

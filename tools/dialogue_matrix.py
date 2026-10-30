@@ -87,26 +87,26 @@ def ffprobe_duration(path):
 
 
 # ---------------------------------------------------------------------------
-# A short teaser fixture
-FIXTURE = """> **ALICE (V.O.)** — *(typing)* Field notes, day five: a parcel arrived for Bob.
-BOB holds a dented box: a toaster that was supposed to be a kettle.
-> **ALICE** — Are you going to complain?
-> **BOB** — To whom? It's an app.
-> **ALICE** — An app is not a person.
-> **ALICE** — *(holding the receipt up to the light)* I'm writing them a letter.
-**TITLE CARD: THE RETURN**"""
+# The 105 teaser fixture (scene 1 only)
+FIXTURE = """> **AVERY (V.O.)** — *(quill scratching)* Survey of the Modern World. Entry Number Five: A parcel arrived for Thomas.
+THOMAS holds a mangled box: a cracked blender that was supposed to be a coffee maker.
+> **AVERY** — You will not complain?
+> **THOMAS** — To who? It's a website.
+> **AVERY** — A website is not a who.
+> **AVERY** — *(picking up the invoice like a treaty)* I shall write them a letter.
+**TITLE CARD: YOUNG AVERY**"""
 
 EXPECTED_LINES = [
-    {"idx": 0, "speaker": "ALICE (V.O.)", "direction": "typing",
-     "text": "Field notes, day five: a parcel arrived for Bob."},
-    {"idx": 1, "speaker": "ALICE", "direction": "",
-     "text": "Are you going to complain?"},
-    {"idx": 2, "speaker": "BOB", "direction": "",
-     "text": "To whom? It's an app."},
-    {"idx": 3, "speaker": "ALICE", "direction": "",
-     "text": "An app is not a person."},
-    {"idx": 4, "speaker": "ALICE", "direction": "holding the receipt up to the light",
-     "text": "I'm writing them a letter."},
+    {"idx": 0, "speaker": "AVERY (V.O.)", "direction": "quill scratching",
+     "text": "Survey of the Modern World. Entry Number Five: A parcel arrived for Thomas."},
+    {"idx": 1, "speaker": "AVERY", "direction": "",
+     "text": "You will not complain?"},
+    {"idx": 2, "speaker": "THOMAS", "direction": "",
+     "text": "To who? It's a website."},
+    {"idx": 3, "speaker": "AVERY", "direction": "",
+     "text": "A website is not a who."},
+    {"idx": 4, "speaker": "AVERY", "direction": "picking up the invoice like a treaty",
+     "text": "I shall write them a letter."},
 ]
 
 # ---------------------------------------------------------------------------
@@ -140,39 +140,39 @@ def main():
     check(lines[1]["idx"] == 1, "skipped action line, next idx = 1")
 
     # Colon format
-    col_lines = dlg.parse_script("ALICE: Hello there.\nBOB (V.O.): Over here.")
+    col_lines = dlg.parse_script("AVERY: Hello there.\nTHOMAS (V.O.): Over here.")
     check(len(col_lines) == 2, "colon format: 2 lines (got %d)" % len(col_lines))
     if len(col_lines) >= 2:
-        check(col_lines[0]["speaker"] == "ALICE", "colon format speaker (got %r)"
+        check(col_lines[0]["speaker"] == "AVERY", "colon format speaker (got %r)"
               % col_lines[0]["speaker"])
-        check(col_lines[1]["speaker"] == "BOB (V.O.)",
+        check(col_lines[1]["speaker"] == "THOMAS (V.O.)",
               "colon format V.O. speaker (got %r)" % col_lines[1]["speaker"])
 
     # Em-dash / en-dash / plain dash separators
     for sep in [" — ", " – ", " - "]:
-        txt = "ALICE%stext" % sep
+        txt = "AVERY%stext" % sep
         r = dlg.parse_script(txt)
-        check(len(r) == 1 and r[0]["speaker"] == "ALICE",
+        check(len(r) == 1 and r[0]["speaker"] == "AVERY",
               "%r separator works" % sep)
 
     # Action lines (no speaker prefix) are skipped
-    act = dlg.parse_script("The room was quiet.\n\nALICE: Hello.")
+    act = dlg.parse_script("The room was quiet.\n\nAVERY: Hello.")
     check(len(act) == 1, "action line skipped (got %d)" % len(act))
-    check(act[0]["speaker"] == "ALICE", "only the dialogue line kept")
+    check(act[0]["speaker"] == "AVERY", "only the dialogue line kept")
 
     # "---" and TITLE CARD are skipped
-    junk = dlg.parse_script("---\n**TITLE CARD: TEST**\nALICE: Hi.")
+    junk = dlg.parse_script("---\n**TITLE CARD: TEST**\nAVERY: Hi.")
     check(len(junk) == 1, "--- and TITLE CARD skipped (got %d)" % len(junk))
 
     # Markdown formatting stripped from text
-    md = dlg.parse_script("ALICE: **bold** and *italic* and _underscore_.")
+    md = dlg.parse_script("AVERY: **bold** and *italic* and _underscore_.")
     check(len(md) == 1, "markdown line parses")
     if md:
         check("*" not in md[0]["text"] and "_" not in md[0]["text"],
               "markdown markers stripped (got %r)" % md[0]["text"])
 
     # Direction inside parentheses at start extracted; inline parens removed
-    par = dlg.parse_script("ALICE: *(alarmed)* Help *now*.")
+    par = dlg.parse_script("AVERY: *(alarmed)* Help *now*.")
     check(len(par) == 1, "parenthetical direction parses")
     if par:
         check(par[0]["direction"] == "alarmed",
@@ -181,7 +181,7 @@ def main():
               "inline directions stripped from text (got %r)" % par[0]["text"])
 
     # Speaker is 1-4 words, ALL CAPS
-    cap = dlg.parse_script("SUPPORT AGENT: Hello.\nDAVE: Hi.")
+    cap = dlg.parse_script("SUPPORT AGENT: Hello.\nJOSEPH: Hi.")
     check(len(cap) == 2, "multi-word speaker name works")
 
     # Non-matching lines without speaker prefix
@@ -193,17 +193,17 @@ def main():
     print("2  normalise_speaker")
     print("=" * 70)
 
-    check(dlg.normalise_speaker("Alice (V.O.)") == "ALICE",
-          "(V.O.) stripped: Alice (V.O.) -> ALICE")
-    check(dlg.normalise_speaker("Alice (O.S.)") == "ALICE",
+    check(dlg.normalise_speaker("Avery (V.O.)") == "AVERY",
+          "(V.O.) stripped: Avery (V.O.) -> AVERY")
+    check(dlg.normalise_speaker("Avery (O.S.)") == "AVERY",
           "(O.S.) stripped")
-    check(dlg.normalise_speaker("Alice (CONT'D)") == "ALICE",
+    check(dlg.normalise_speaker("Avery (CONT'D)") == "AVERY",
           "(CONT'D) stripped")
-    check(dlg.normalise_speaker("Alice (O.C.)") == "ALICE",
+    check(dlg.normalise_speaker("Avery (O.C.)") == "AVERY",
           "(O.C.) stripped")
-    check(dlg.normalise_speaker("alice") == "ALICE",
+    check(dlg.normalise_speaker("avery") == "AVERY",
           "lowercase uppercased")
-    check(dlg.normalise_speaker("  Alice  ") == "ALICE",
+    check(dlg.normalise_speaker("  Avery  ") == "AVERY",
           "extra spaces stripped")
     check(dlg.normalise_speaker("SUPPORT AGENT") == "SUPPORT AGENT",
           "multi-word name preserved")
@@ -214,16 +214,16 @@ def main():
     print("=" * 70)
 
     spk = dlg.speakers(lines)
-    check(spk == ["ALICE", "BOB"],
+    check(spk == ["AVERY", "THOMAS"],
           "unique speakers in first-appearance order (got %r)" % spk)
 
-    # The V.O. line is folded: normalise removes the suffix -> ALICE
+    # The V.O. line is folded: normalise removes the suffix -> AVERY
     norm_spk = [dlg.normalise_speaker(l["speaker"]) for l in lines]
     unique = []
     for s in norm_spk:
         if s not in unique:
             unique.append(s)
-    check(unique == ["ALICE", "BOB"],
+    check(unique == ["AVERY", "THOMAS"],
           "V.O. folded: speakers = %r" % unique)
 
     print("")
@@ -266,7 +266,7 @@ def main():
 
     check(dlg.slugify("Hello World!") == "hello-world",
           "basic slug: Hello World! -> hello-world")
-    check(dlg.slugify("  ALICE  ") == "alice",
+    check(dlg.slugify("  AVERY  ") == "avery",
           "whitespace stripped")
     check(dlg.slugify("Big   Spaces") == "big-spaces",
           "multiple spaces collapsed")
@@ -325,6 +325,27 @@ def main():
           "contains notes (got %r)" % desc)
     check(desc.endswith("."), "ends with period")
     check(", ," not in desc, "no double commas (got %r)" % desc)
+
+    # Ryan 2026-10-21: "the accent is not working, it all sounds like plain english" --
+    # the accent leads (right after age/gender), is said strongly, and a closing sentence
+    # names the language it is spoken in. "neutral" gets none of that.
+    vs = dlg.new_voice("Scot", gender="female", accent="Scottish", age_years=40,
+                       notes="dry, amused")
+    ds = dlg.compose_description(vs)
+    check(ds.startswith("A 40-year-old female voice with a strong, unmistakable Scottish "
+                        "accent") and ds.index("Scottish") < ds.index("dry, amused"),
+          "the accent comes first and strongly (got %r)" % ds[:90])
+    check("She speaks English with a heavy Scottish accent" in ds and
+          "never neutral standard English" in ds,
+          "...and is reinforced in the language it's spoken in (got %r)" % ds[-110:])
+    check("heavy slight" not in desc and "strong, unmistakable slight" not in desc,
+          "a typed strength ('slight') is not stacked under 'strong' (got %r)" % desc)
+    dn = dlg.compose_description(dlg.new_voice("N", gender="female", accent="neutral",
+                                               age_years=30, notes=""))
+    check("speaks" not in dn and "unmistakable" not in dn,
+          "a neutral accent gets no accent push (got %r)" % dn)
+    check(dlg.compose_description(dlg.new_voice("Kid", gender="male", age_years=8))
+          .startswith("An 8-year-old"), "An 8-year-old")
 
     # All-zero sliders = no slider phrases at all
     v2 = dlg.new_voice("Zero", gender="female", accent="neutral",
@@ -421,10 +442,10 @@ def main():
     print("11  new_voice")
     print("=" * 70)
 
-    v = dlg.new_voice("Alice Test")
-    check(v["name"] == "Alice Test", "name set (got %r)" % v["name"])
-    check(v["slug"] == "alice-test", "slug auto-generated (got %r)" % v["slug"])
-    check(v["characters"] == ["ALICE TEST"],
+    v = dlg.new_voice("Avery Test")
+    check(v["name"] == "Avery Test", "name set (got %r)" % v["name"])
+    check(v["slug"] == "avery-test", "slug auto-generated (got %r)" % v["slug"])
+    check(v["characters"] == ["AVERY TEST"],
           "characters auto-set (got %r)" % v["characters"])
     check(v["source"] == "bank", "source = 'bank' (got %r)" % v["source"])
     check(isinstance(v["sliders"], dict) and v["sliders"]["pitch"] == 0,
@@ -450,22 +471,22 @@ def main():
     print("12  save_voice / load_voice / list_voices / charpack import")
     print("=" * 70)
 
-    v = dlg.new_voice("Alice Test")
+    v = dlg.new_voice("Avery Test")
     dlg.save_voice(v)
-    loaded = dlg.load_voice("alice-test")
+    loaded = dlg.load_voice("avery-test")
     check(loaded is not None, "load_voice returns the saved voice")
     if loaded:
-        check(loaded["name"] == "Alice Test", "name round-trips")
-        check(loaded["slug"] == "alice-test", "slug round-trips")
+        check(loaded["name"] == "Avery Test", "name round-trips")
+        check(loaded["slug"] == "avery-test", "slug round-trips")
 
     # list_voices
-    v2 = dlg.new_voice("Bob", gender="male", accent="neutral")
+    v2 = dlg.new_voice("Thomas", gender="male", accent="neutral")
     dlg.save_voice(v2)
     lst = dlg.list_voices()
     check(len(lst) >= 2, "list_voices has 2+ voices (got %d)" % len(lst))
     names = [(v["name"], v["slug"]) for v in lst]
-    check(("Alice Test", "alice-test") in names, "Alice Test in list")
-    check(("Bob", "bob") in names, "Bob in list")
+    check(("Avery Test", "avery-test") in names, "Avery Test in list")
+    check(("Thomas", "thomas") in names, "Thomas in list")
     # Sorted by name
     check(lst[0]["name"] <= lst[-1]["name"],
           "list sorted by name (got %r)" % [v["name"] for v in lst])
@@ -554,57 +575,57 @@ def main():
     print("14  auto_cast")
     print("=" * 70)
 
-    speakers = ["ALICE", "BOB", "CAROL"]
+    speakers = ["AVERY", "THOMAS", "NATE"]
     voices_list = [
-        dlg.new_voice("Bob", gender="male"),
-        dlg.new_voice("Alice", gender="male"),
-        dlg.new_voice("Dave", gender="male"),
+        dlg.new_voice("Thomas", gender="male"),
+        dlg.new_voice("Avery", gender="male"),
+        dlg.new_voice("Joseph", gender="male"),
     ]
     # Set characters for some
-    voices_list[0]["characters"] = ["BOB", "BOBBY"]
-    voices_list[1]["characters"] = ["ALICE"]
-    voices_list[2]["characters"] = ["DAVE"]
+    voices_list[0]["characters"] = ["THOMAS", "TOM"]
+    voices_list[1]["characters"] = ["AVERY"]
+    voices_list[2]["characters"] = ["JOSEPH"]
 
     # Map by slug name
     voices_by_slug = {v["slug"]: v for v in voices_list}
 
     cast = dlg.auto_cast(speakers, voices_by_slug)
-    check(cast.get("ALICE") == "alice",
-          "auto_cast ALICE -> alice (got %r)" % cast.get("ALICE"))
-    check(cast.get("BOB") == "bob",
-          "auto_cast BOB -> bob (got %r)" % cast.get("BOB"))
-    check(cast.get("CAROL") is None,
-          "CAROL has no match -> None (got %r)" % cast.get("CAROL"))
+    check(cast.get("AVERY") == "avery",
+          "auto_cast AVERY -> avery (got %r)" % cast.get("AVERY"))
+    check(cast.get("THOMAS") == "thomas",
+          "auto_cast THOMAS -> thomas (got %r)" % cast.get("THOMAS"))
+    check(cast.get("NATE") is None,
+          "NATE has no match -> None (got %r)" % cast.get("NATE"))
 
     # Previous cast takes precedence
-    prev = {"CAROL": "carol_saved", "ALICE": "old_alice"}
+    prev = {"NATE": "nate_saved", "AVERY": "old_avery"}
     # Create dummy voices for the previous slugs so they "still exist"
-    v_nate_saved = dlg.new_voice("carol_saved", gender="male", accent="")
-    v_old_alice = dlg.new_voice("old_alice", gender="male", accent="")
+    v_nate_saved = dlg.new_voice("nate_saved", gender="male", accent="")
+    v_old_avery = dlg.new_voice("old_avery", gender="male", accent="")
     expanded_voices = dict(voices_by_slug)
-    expanded_voices["carol_saved"] = v_nate_saved
-    expanded_voices["old_alice"] = v_old_alice
+    expanded_voices["nate_saved"] = v_nate_saved
+    expanded_voices["old_avery"] = v_old_avery
     cast2 = dlg.auto_cast(speakers, expanded_voices, previous=prev)
-    check(cast2.get("CAROL") == "carol_saved",
-          "previous cast preserved for CAROL (slug exists)")
-    check(cast2.get("ALICE") == "old_alice",
-          "previous cast preserved for ALICE (slug exists)")
+    check(cast2.get("NATE") == "nate_saved",
+          "previous cast preserved for NATE (slug exists)")
+    check(cast2.get("AVERY") == "old_avery",
+          "previous cast preserved for AVERY (slug exists)")
 
     # When previous is not set, auto-cast kicks in
-    check(cast2.get("BOB") == "bob",
-          "BOB auto-cast when no previous mapping")
+    check(cast2.get("THOMAS") == "thomas",
+          "THOMAS auto-cast when no previous mapping")
 
     # When previous slug does NOT exist, fall through to characters/name
     cast_fallthrough = dlg.auto_cast(speakers, voices_by_slug, previous=prev)
-    check(cast_fallthrough.get("CAROL") is None,
-          "CAROL unchanged when previous slug does not exist")
-    check(cast_fallthrough.get("ALICE") == "alice",
-          "ALICE auto-cast when previous slug does not exist")
+    check(cast_fallthrough.get("NATE") is None,
+          "NATE unchanged when previous slug does not exist")
+    check(cast_fallthrough.get("AVERY") == "avery",
+          "AVERY auto-cast when previous slug does not exist")
 
     # Precedence: previous > characters > name (all slugs exist)
-    prev3 = {"ALICE": "bob"}  # Bob voice has ALICE in characters
+    prev3 = {"AVERY": "thomas"}  # Thomas voice has AVERY in characters
     cast3 = dlg.auto_cast(speakers, expanded_voices, previous=prev3)
-    check(cast3.get("ALICE") == "bob",
+    check(cast3.get("AVERY") == "thomas",
           "previous cast takes priority even over characters match")
 
     print("")
@@ -612,31 +633,31 @@ def main():
     print("15  new_project / save_project / load_project / list_projects / reparse")
     print("=" * 70)
 
-    proj = dlg.new_project("Episode Teaser",
-                           "ALICE: Line one.\nBOB: Line two.")
-    check(proj["name"] == "Episode Teaser",
+    proj = dlg.new_project("105 Teaser",
+                           "AVERY: Line one.\nTHOMAS: Line two.")
+    check(proj["name"] == "105 Teaser",
           "project name set (got %r)" % proj["name"])
-    check(proj["slug"] == "episode-teaser",
+    check(proj["slug"] == "105-teaser",
           "project slug auto-generated (got %r)" % proj["slug"])
     check(len(proj["lines"]) == 2, "project parsed to 2 lines")
     check(proj["cast"] == {}, "cast starts empty")
     check(proj["gap_ms"] == 350, "default gap_ms = 350")
 
     dlg.save_project(proj)
-    loaded_p = dlg.load_project("episode-teaser")
+    loaded_p = dlg.load_project("105-teaser")
     check(loaded_p is not None, "load_project returns saved project")
     if loaded_p:
-        check(loaded_p["name"] == "Episode Teaser", "project name round-trips")
+        check(loaded_p["name"] == "105 Teaser", "project name round-trips")
         check(len(loaded_p["lines"]) == 2, "lines round-trip")
 
     # list_projects
-    proj2 = dlg.new_project("Another", "CAROL: Yes.")
+    proj2 = dlg.new_project("Another", "NATE: Yes.")
     dlg.save_project(proj2)
     plist = dlg.list_projects()
     check(len(plist) >= 2, "list_projects has 2+ projects (got %d)" % len(plist))
 
     # reparse keeps takes for unchanged lines
-    p3 = dlg.new_project("Reparse Test", "ALICE: Hello.\nBOB: Goodbye.")
+    p3 = dlg.new_project("Reparse Test", "AVERY: Hello.\nTHOMAS: Goodbye.")
     p3["lines"][0]["takes"] = [{"file": "lines/000_1.wav", "seconds": 1.0,
                                 "score": 0.95}]
     p3["lines"][1]["takes"] = [{"file": "lines/001_1.wav", "seconds": 1.5,
@@ -645,7 +666,7 @@ def main():
     p3["lines"][1]["kept"] = 0
 
     # Re-parse with unchanged first line, changed second line
-    new_script = "ALICE: Hello.\nBOB: See you later."
+    new_script = "AVERY: Hello.\nTHOMAS: See you later."
     p4 = dlg.reparse(p3, new_script)
     check(len(p4["lines"]) == 2, "reparse keeps 2 lines")
     check(len(p4["lines"][0]["takes"]) == 1,
@@ -656,11 +677,23 @@ def main():
           % len(p4["lines"][1]["takes"]))
 
     # reparse with added line
-    p5 = dlg.reparse(p3, "ALICE: Hello.\nBOB: Goodbye.\nCAROL: Added.")
+    p5 = dlg.reparse(p3, "AVERY: Hello.\nTHOMAS: Goodbye.\nNATE: Added.")
     check(len(p5["lines"]) == 3, "reparse with added line -> 3 lines")
     check(len(p5["lines"][0]["takes"]) == 1, "first line keeps takes")
     check(len(p5["lines"][1]["takes"]) == 1, "second line keeps takes")
     check(len(p5["lines"][2]["takes"]) == 0, "added line has no takes")
+
+    # reparse keeps the LINES-table choices too: the window re-parses as you type, so a
+    # mood picked in the table must survive an edit elsewhere in the script
+    p3["lines"][0]["mood"] = "angry"
+    p3["lines"][1]["sung"] = True
+    p6 = dlg.reparse(p3, "AVERY: Hello.\nTHOMAS: Goodbye.\nNATE: Added.")
+    check(p6["lines"][0].get("mood") == "angry",
+          "an unchanged line keeps its chosen mood (got %r)" % p6["lines"][0].get("mood"))
+    check(p6["lines"][1].get("sung") is True, "an unchanged line keeps its sung choice")
+    p7 = dlg.reparse(p3, "AVERY: Hello there.\nTHOMAS: Goodbye.")
+    check(p7["lines"][0].get("mood") != "angry",
+          "a CHANGED line starts fresh (mood %r)" % p7["lines"][0].get("mood"))
 
     print("")
     print("=" * 70)
@@ -802,7 +835,7 @@ def main():
           "identical strings score 1.0")
     check(near(dlg.score("Hello world.", "hello world"), 1.0),
           "case & punctuation treated as match")
-    s = dlg.score("I'm writing them a letter.",
+    s = dlg.score("I shall write them a letter.",
                   "I should write them a letter")
     check(s < 1.0 and s > 0.0,
           "similar but not identical: score in (0,1) (got %.4f)" % s)
@@ -834,19 +867,19 @@ def main():
     print("=" * 70)
 
     # Plain 'NAME — text' without bold
-    plain = dlg.parse_script("ALICE — just text")
-    check(len(plain) == 1 and plain[0]["speaker"] == "ALICE" and
+    plain = dlg.parse_script("AVERY — just text")
+    check(len(plain) == 1 and plain[0]["speaker"] == "AVERY" and
           plain[0]["text"] == "just text",
           "plain NAME — text format works")
 
     # Mixed bold and plain in same script
-    mixed = dlg.parse_script("> **ALICE** — bold.\nBOB: plain.")
+    mixed = dlg.parse_script("> **AVERY** — bold.\nTHOMAS: plain.")
     check(len(mixed) == 2, "mixed bold/plain formats -> 2 lines")
 
     # Multiple suffix types
     for suffix in ["(V.O.)", "(O.S.)", "(CONT'D)", "(O.C.)"]:
-        r = dlg.parse_script("ALICE %s: text." % suffix)
-        check(len(r) == 1 and r[0]["speaker"] == "ALICE %s" % suffix,
+        r = dlg.parse_script("AVERY %s: text." % suffix)
+        check(len(r) == 1 and r[0]["speaker"] == "AVERY %s" % suffix,
               "%r speaker parsed (got %r)" % (suffix, r[0]["speaker"]))
 
     print("")
@@ -884,7 +917,7 @@ def main():
     print("24  edge: project directory creation")
     print("=" * 70)
 
-    p_new = dlg.new_project("Brand New", "ALICE: Hi.")
+    p_new = dlg.new_project("Brand New", "AVERY: Hi.")
     dlg.save_project(p_new)
     p_json = os.path.join(tmp, "dialogue", "brand-new", "project.json")
     check(os.path.exists(p_json), "save_project creates project.json")
@@ -921,10 +954,23 @@ def main():
 
     furn = dlg.parse_script("CARD: **THAT WAS THREE WEEKS AGO.**\n"
                             "THE EXPERIMENT: phones in a drawer, one day.\n"
-                            "ALICE: Hooray.")
-    check([l["speaker"] for l in furn] == ["ALICE"],
+                            "AVERY: Huzzah.")
+    check([l["speaker"] for l in furn] == ["AVERY"],
           "CARD:/THE EXPERIMENT: lines are not dialogue (got %r)" % [l["speaker"] for l in furn])
 
+    s1 = os.path.expanduser("~/project/scripts/s1-v2")
+    if os.path.isdir(s1):
+        import glob as _g
+        allsp = set(); n = 0
+        for fp in sorted(_g.glob(os.path.join(s1, "1*.md"))):
+            with open(fp, encoding="utf-8") as fh:
+                L = dlg.parse_script(fh.read())
+            n += len(L); allsp.update(dlg.speakers(L))
+        check(n >= 300, "the real season parses to >= 300 lines (got %d)" % n)
+        check({"AVERY", "NATE", "THOMAS", "JOSEPH"} <= allsp, "the four leads are all found")
+        check(not ({"CARD", "THE EXPERIMENT"} & allsp), "no furniture speakers in the real season")
+    else:
+        print("  skip  real season not on this machine")
 
     # ---- summary ----------------------------------------------------------------
     print("")

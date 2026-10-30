@@ -15,7 +15,7 @@ Reads widgets_values_named (name -> value), the same field the flattener consume
 every LITERAL input. Linked inputs are skipped: the template routes many widgets through links,
 and the flat graph legitimately still has a link (or a resolved value) there.
 
-usage:  python3 tools/flatten_fidelity.py TEMPLATE.json FLATTENED.json [--ssh ryan@forge]
+usage:  python3 tools/flatten_fidelity.py TEMPLATE.json FLATTENED.json [--ssh name@forge]
         (--ssh is the SSH TARGET; the ComfyUI URL forge:8188 is NOT an ssh host)
 exit:   0 faithful / 1 mismatches found (so it can gate a build)
 """

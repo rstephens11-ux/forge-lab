@@ -133,6 +133,48 @@ pf = m2.group(0) if m2 else ""
 check('if job["err"]:' in pf and "return" in pf.split('if job["err"]:')[1].split("p2, a2")[0],
       "a failed fit changes nothing (no silent random fallback)")
 
+# ---------------------------------------------------------------- §block (bug fix 4)
+print("§block an edited block reaches the weirdo VIDEO prompt")
+_pk, _act = fl.roll_weirdo(random.Random(7))
+_auto = fl.compose_character_prompt(_pk, for_video=False)
+check(fl.weirdo_video_prompt(_pk, _auto, "waves") ==
+      fl.compose_character_prompt(_pk, for_video=True, action="waves"),
+      "untouched block -> exactly the picks-built video prompt")
+check(fl.weirdo_video_prompt(_pk, "", "waves") ==
+      fl.compose_character_prompt(_pk, for_video=True, action="waves"),
+      "empty block -> the picks-built video prompt")
+_ed = fl.weirdo_video_prompt(_pk, "A baker whose eyebrows are tiny croissants. " +
+                             fl.CHAR_IDENTITY_TAIL, "kneads dough")
+check(_ed.startswith("A baker whose eyebrows are tiny croissants.") and "kneads dough." in _ed,
+      "edited block -> the edited words + the action (%r)" % _ed[:80])
+check(fl.CHAR_IDENTITY_TAIL.strip() not in _ed and _ed.endswith(fl.CHAR_VIDEO_TAIL.strip()),
+      "edited block -> still-photo tail swapped for the video tail")
+
+# ---- the offline roll can never trip the adults-only guard on its OWN pools
+import random as _rnd
+import weirdos as _wd
+import char_vocab as _cv
+_bad = []
+for _s, _p, _w in _wd.SUBJECTS:
+    try:
+        _wd._clean({"name": "X", "subject": _s, "pronoun": _p, "look": "", "feature": "f",
+                    "wardrobe": _w, "setting": "s", "action": "a", "catchphrase": "c",
+                    "hook": "h", "who": "%s who never notices." % _s, "voice": "v"}, "Anything")
+    except ValueError:
+        _bad.append(_s)
+check(not _bad, "every built-in subject passes the adults-only guard (%r)" % _bad)
+_crash = 0
+for _i in range(400):
+    try:
+        _wd.roll(rng=_rnd.Random(_i))
+    except ValueError:
+        _crash += 1
+check(_crash == 0, "400 offline rolls, none refused by the guard (%d were)" % _crash)
+check(_cv.is_minor("a minor") and _cv.is_minor("two minors") and
+      not _cv.is_minor("a minor-league umpire") and _wd._CHILD.search("a minor") and
+      not _wd._CHILD.search("a minor league coach"),
+      "'minor' is still caught; 'minor-league' is not a child")
+
 print("\n%d checks, %d failed" % (N[0], len(FAILS)))
 for f in FAILS:
     print("  FAILED: %s" % f)

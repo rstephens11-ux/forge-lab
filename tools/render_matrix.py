@@ -26,9 +26,10 @@ fl = importlib.util.module_from_spec(_spec)
 _spec.loader.exec_module(fl)
 
 HOME = os.path.expanduser("~")
-STILL = os.path.join(HERE, "drafts", "kf-smoketest-char.png")
+STILL = os.path.join(HERE, "drafts", "kf-smoketest.png")
 STILL2 = os.path.join(HERE, "drafts", "kf-video-frame.png")
-ALICE = os.path.join(HOME, "forge-lab-assets", "character-ref.png")
+AVERY = os.path.join(HOME, "project", "pitch-deck", "images",
+                      "avery-face-ref-canon.png")
 CLIP = os.path.join(HERE, "drafts", "chain-1-i2v.mp4")
 DRIVE = os.path.join(HERE, "drafts", "chain-2-flf.mp4")
 AUDIO = os.path.join(HOME, "forge-lab", "inputs", "_w08.wav")
@@ -97,7 +98,7 @@ CASES = [
     # ── H3 VIDEO — every mode the flags can select ───────────────────────────────────────
     ("h3:r2v", "video", dict(H3C, video_mode="r2v",
                              prompt="<Picture 1> is the character. He walks toward camera."),
-     [ALICE]),
+     [AVERY]),
     ("h3:i2v", "video", dict(H3C, video_mode="i2v",
                              prompt="animate this frame: he turns his head"), [STILL]),
     ("h3:flf", "video", dict(H3C, video_mode="flf",
@@ -138,7 +139,7 @@ def queue_empty():
 
 def main():
     cases = [c for c in CASES if not ONLY or c[0] in ONLY]
-    missing = [p for p in (STILL, STILL2, ALICE, CLIP, DRIVE, AUDIO) if not os.path.exists(p)]
+    missing = [p for p in (STILL, STILL2, AVERY, CLIP, DRIVE, AUDIO) if not os.path.exists(p)]
     if missing:
         print("MISSING ASSETS (fix before running):")
         for m in missing:
@@ -234,7 +235,7 @@ def main():
         results.append((label, bool(good), "%.0fs" % took))
 
     print("\n" + "=" * 74)
-    print("RENDER MATRIX SUMMARY")
+    print("RENDER MATRIX SUMROBIN")
     for label, ok, note in results:
         print("  %-4s %-13s %s" % ("ok" if ok else "FAIL", label, note))
     bad = [r for r in results if not r[1]]

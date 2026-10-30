@@ -16,20 +16,51 @@ import threading
 import time
 
 import dialogue as dlg   # stdlib-only engine; safe at module top (no tkinter)
+try:
+    import dispatch as _dsp      # the rig's queue (Tk-free); None if it is missing
+except Exception:                # noqa: BLE001
+    _dsp = None
 
 
-def plan_render(pj, voices, mode="missing"):
+def mood_wav_own(v, mood):
+    """Absolute path of a voice's OWN sample for `mood`, or None.
+
+    ⚠️ Deliberately NOT the neutral fallback that dlg.voice_wav() gives bank voices: that is
+    right for playback and wrong for planning — it made a brand-new mood look already designed.
+    Character-pack voices bring their own wav, so theirs is taken as-is.
+    """
+    if v.get("source") == "character":
+        return dlg.voice_wav(v, mood)
+    mw = ((v.get("moods") or {}).get(mood) or {}).get("wav") or ""
+    if not mw:
+        return None
+    slug = v.get("slug") or dlg.slugify(v.get("name", ""))
+    path = os.path.join(dlg.voices_dir(), slug, mw)
+    return path if os.path.isfile(path) else None
+
+
+def plan_render(pj, voices, mode="missing", engine="qwen"):
     """PURE: what a RENDER click must send. -> (design_items, clone_job or None, skipped msgs).
 
-    * design_items: one per (voice, mood) a line needs whose reference wav does not exist.
+    * design_items: one per reference sample a line needs that does not exist yet.
       Character-pack voices are never designed (read-only; they bring their own wav).
+      ⚠️ Designs ALWAYS run on qwen, under BOTH engines: only VoiceDesign can make a voice
+      from a DESCRIPTION, and fish has no VoiceDesign at all. Under `engine="fish"` the only
+      sample worth designing is a voice's NEUTRAL one — the single reference fish clones from.
     * clone_job: the rig job for every line with no take (mode "missing") or every line
-      (mode "all"), voices keyed "<slug>:<mood>" — the SAME key each clone item names.
+      (mode "all").
+        - qwen: voices keyed "<slug>:<mood>" — there a mood IS its own reference sample.
+        - fish: voices keyed "<slug>" — ONE reference per voice, and the mood rides in the
+          line's TEXT as an inline `[tag]` (see dlg.fish_line_text).
       Lines whose sample does not exist yet are left out (they come in after the design batch).
     * A line's mood: its own "mood", else mood_of(direction, the voice's moods), else neutral.
     """
     designs, clones, voices_map, skipped = [], [], {}, []
     seen = set()
+    # "inline tag" engines — fish (S2-Pro) and drama3 (Drama 3 int4) both take the mood as a
+    # `[tag]` in the line's TEXT and clone from ONE reference per voice. Neither has a
+    # VoiceDesign, so designs still run on qwen under either.
+    fish = engine in ("fish", "drama3")
     for i, li in enumerate(pj.get("lines", [])):
         if dlg.is_sung(li):
             continue        # sung lines go to YuE2 — see plan_sung()
@@ -42,34 +73,39 @@ def plan_render(pj, voices, mode="missing"):
                 skipped.append(msg)
             continue
         moods = v.get("moods") or {}
-        mood = li.get("mood") or dlg.mood_of(li.get("direction", ""), list(moods) or ["neutral"])
-        if mood not in moods and v.get("source") == "character":
-            mood = "neutral"
-        key = "%s:%s" % (slug, mood)
-        # ⚠️ voice_wav() falls back to the NEUTRAL sample when a mood's own file is missing —
-        # right for playback, wrong here: it made a brand-new mood look already designed.
-        if v.get("source") == "character":
-            wav = dlg.voice_wav(v, mood)
+        if fish:
+            # ⚠️ fish does NOT limit the mood to the samples a voice happens to have designed:
+            # the mood is a free inline tag, so every mood in the vocabulary is available
+            # (that is the whole point — `*(shouting)*` can shout without a shouting sample).
+            # Under qwen the mood MUST name an existing sample, hence the cap there.
+            avail = list(dlg.MOOD_WORDS)
         else:
-            mw = (moods.get(mood) or {}).get("wav") or ""
-            wav = os.path.join(dlg.voices_dir(), slug, mw) if mw else None
-            if wav and not os.path.isfile(wav):
-                wav = None
+            avail = list(moods) or ["neutral"]
+        mood = li.get("mood") or dlg.mood_of(li.get("direction", ""), avail)
+        if not fish and mood not in moods and v.get("source") == "character":
+            mood = "neutral"
+        # fish clones the voice's NEUTRAL sample whatever the mood is — the TAG carries the mood
+        sample = "neutral" if fish else mood
+        key = slug if fish else "%s:%s" % (slug, mood)
+        wav = mood_wav_own(v, sample)
         if not wav:
             if key not in seen and v.get("source") != "character":
                 seen.add(key)
-                md = moods.get(mood) or {}
-                designs.append({"id": key, "instruct": dlg.compose_description(v, mood),
+                md = moods.get(sample) or {}
+                designs.append({"id": "%s:%s" % (slug, sample),
+                                "instruct": dlg.compose_description(v, sample),
                                 "text": md.get("ref_text") or dlg.DEFAULT_SAMPLE,
-                                "out": "%s__%s.wav" % (slug, mood)})
-            elif v.get("source") == "character" and not wav:
+                                "out": "%s__%s.wav" % (slug, sample)})
+            elif v.get("source") == "character":
                 skipped.append("%s has no voice.wav" % slug)
             continue
         if li.get("takes") and mode != "all":
             continue
         voices_map[key] = {"ref_wav": wav,
-                           "ref_text": (moods.get(mood) or {}).get("ref_text") or dlg.DEFAULT_SAMPLE}
-        clones.append({"id": "line%d" % i, "voice": key, "text": li["text"],
+                           "ref_text": (moods.get(sample) or {}).get("ref_text") or dlg.DEFAULT_SAMPLE}
+        clones.append({"id": "line%d" % i, "voice": key,
+                       "text": dlg.fish_line_text(mood, li["text"], v.get("fish_direction"))
+                       if fish else li["text"],
                        "out": "line%03d.wav" % i, "_line": i})
     job = None
     if clones:
@@ -116,14 +152,21 @@ def render_sung(items, pj, proj_dir, submit, wait_and_collect, runs_dir, progres
         try:
             p = _song.yue2_plan_params(it["style"], it["lyrics"], seconds=it["seconds"],
                                        prefix="dialogue/sung")
-            pid, _seed = submit("song", p, None)
-            meta = wait_and_collect(pid, timeout=600) or {}
+            if _dsp is not None and _dsp.running():
+                # through the QUEUE (2026-10-22): a sung line waits for a card like everything
+                # else. The submit/wait seam below stays for callers with no scheduler (tests).
+                meta = _dsp.render("Sung line %d — %s" % (it["_line"] + 1, pj.get("slug") or ""),
+                                   "song", p, None, need="song",
+                                   est_s=float(it.get("seconds") or 30) * 4) or {}
+            else:
+                pid, _seed = submit("song", p, None)
+                meta = wait_and_collect(pid, timeout=600) or {}
             files = [x for x in (meta.get("images") or [])
                      if (x.get("file") or "").lower().endswith((".flac", ".wav", ".mp3"))]
             if not files:
                 raise RuntimeError("YuE2 finished but no audio came back (%s)"
                                    % (meta.get("state") or meta.get("error") or "?"))
-            src = os.path.join(runs_dir, meta.get("id") or pid, files[0]["file"])
+            src = os.path.join(runs_dir, meta.get("id") or "", files[0]["file"])
             fn = "%03d_%d_sung.wav" % (li["idx"], len(li.get("takes", [])) + 1)
             dst = os.path.join(proj_dir, "lines", fn)
             os.makedirs(os.path.dirname(dst), exist_ok=True)
@@ -134,7 +177,7 @@ def render_sung(items, pj, proj_dir, submit, wait_and_collect, runs_dir, progres
             li.pop("error", None)
             li.setdefault("takes", []).append({"file": "lines/" + fn, "seconds": secs,
                                                "heard": "", "score": None, "sung": True,
-                                               "run": meta.get("id") or pid})
+                                               "run": meta.get("id") or ""})
             li["kept"] = len(li["takes"]) - 1
             made.append(li)
         except Exception as exc:
@@ -178,15 +221,56 @@ def open_dialogue(root, ctx):
     RED = "#e0553b"
 
     # ------------------------------------------------------------------ window
-    win = tk.Toplevel(root)
+    import dock as _dock                 # a tab in the main window (Ryan: tabs)
+    win = _dock.window(root)
     win.title("Dialogue")
     win.configure(bg=C["bg"])
     sw, sh = win.winfo_screenwidth(), win.winfo_screenheight()
     win.geometry("%dx%d" % (min(1180, sw - 40), min(860, sh - 120)))
 
     st = {"pj": None, "editing": None, "voices": {}, "busy": None,
-          "player": None, "job": None, "progress": "", "cast_vars": {},
+          "player": None, "job": None, "progress": "", "cast_vars": {}, "cast_menus": {},
           "cast_rows": {}}
+
+    # ------------------------------------------------------------------ voice engine state
+    # Created HERE, above every handler. The trap this app has already hit once: a handler
+    # defined above a widget referring to something defined below it — a NameError at
+    # CONSTRUCTION takes the whole window down, and inside a Tk callback it is swallowed.
+    # Only the widgets themselves belong in step 4.
+    _ENGINE_NOTES = {
+        "qwen": "design + clone \u00b7 a mood is its own DESIGNED sample",
+        "fish": "S2-Pro \u00b7 a mood is an inline [tag], ONE reference per voice \u00b7 5\u00d7 the load",
+        "drama3": "Drama 3 int4 \u00b7 inline [tag], ONE reference per voice \u00b7 "
+                  "server start ~2 min, then ~1\u00d7 realtime",
+    }
+    eng_var = tk.StringVar(value=dlg.engine_label(dlg.DEFAULT_ENGINE))
+    _eng_lbl = {}
+
+    def _engine_key():
+        """The engine key behind the dropdown's current label."""
+        lab = eng_var.get()
+        for k, l in dlg.ENGINES:
+            if l == lab:
+                return k
+        return dlg.DEFAULT_ENGINE
+
+    def _engine_note():
+        if _eng_lbl.get("w") is not None:
+            _eng_lbl["w"].configure(text=_ENGINE_NOTES.get(_engine_key(), ""))
+
+    def _sync_engine(*_a):
+        """Mirror the project's engine into the dropdown. A project with no key stays qwen."""
+        if st["pj"] is None:
+            eng_var.set(dlg.engine_label(dlg.DEFAULT_ENGINE))
+        else:
+            eng_var.set(dlg.engine_label(st["pj"].get("engine") or dlg.DEFAULT_ENGINE))
+        _engine_note()
+
+    def _engine_changed(*_a):
+        if st["pj"] is not None:
+            st["pj"]["engine"] = _engine_key()
+        _engine_note()
+        _refresh_estimate()
 
     # ------------------------------------------------------------------ widget helpers
     def lam(parent, text, **kw):
@@ -251,8 +335,178 @@ def open_dialogue(root, ctx):
     body = tk.Frame(win, bg=C["bg"])
     body.pack(fill="both", expand=True, padx=14, pady=(0, 14))
 
-    lp = tk.Frame(body, bg=C["bg"])
-    lp.pack(side="left", fill="both", expand=True)
+    # ------------------------------------------------------------- QUICK LINE (pinned, top)
+    # Ryan, 2026-10-15: "i cant easily type a sentence and see the output or choose accents".
+    # The 5-step flow has NO sound in it until SCRIPT+CAST+VOICE exist, and the editor that owns
+    # the 28 ACCENTS is a separate Toplevel behind CAST's EDIT. This bar is the fast path: one
+    # sentence, one voice (existing or SCRATCH), one press. It reuses the AUDITION path, so the
+    # typed sentence simply BECOMES that voice's sample text - no new engine code.
+    QL_SCRATCH = "\u2014 scratch voice \u2014"
+    qlf = tk.Frame(body, bg=C["panel"], highlightthickness=1, highlightbackground=C["line"])
+    qlf.pack(fill="x", pady=(0, 8))
+    # ONE row (redesign 2026-10-17): sentence, voice, Speak, replay. The scratch-voice knobs
+    # (gender / age / accent / save accent) fold behind "scratch voice ▾" — on the Mac the old
+    # second row ran off the right edge and clipped SET ACCENT.
+    _qlh = tk.Frame(qlf, bg=C["panel"]); _qlh.pack(fill="x", padx=10, pady=(8, 8))
+    tk.Label(_qlh, text="TRY A LINE", bg=C["panel"], fg=C["ochre"], font=fmono).pack(side="left")
+    ql_txt = tk.StringVar(value="")
+    tk.Entry(_qlh, textvariable=ql_txt, bg="#100e0c", fg=C["ink"], relief="flat",
+             font=fmono, insertbackground=C["ink"]).pack(side="left", fill="x", expand=True,
+                                                         padx=(8, 6))
+    ql_voice = tk.StringVar(value=QL_SCRATCH)
+    ql_vmenu = tk.OptionMenu(_qlh, ql_voice, QL_SCRATCH)
+    ql_vmenu.configure(bg=C["panel2"], fg=C["ink"], relief="flat", font=fsm,
+                       highlightthickness=0, activebackground=C["rust"],
+                       activeforeground="#fff", borderwidth=0, width=14, anchor="w")
+    ql_vmenu["menu"].configure(bg=C["panel2"], fg="#000000", font=fsm)
+    ql_vmenu.pack(side="left")
+    btn(_qlh, "\u21bb", lambda: _ql_refill()).pack(side="left", padx=(2, 8))
+    btn(_qlh, "Speak", lambda: _ql_speak()).pack(side="left")
+    btn(_qlh, "\u25b6 Last", lambda: _ql_play()).pack(side="left", padx=(6, 0))
+    _ql_more = tk.Label(_qlh, text="scratch voice \u25be", bg=C["panel"], fg=C["ochre"],
+                        font=fsm, cursor="hand2")
+    _ql_more.pack(side="left", padx=(10, 0))
+    _qlr2 = tk.Frame(qlf, bg=C["panel"])          # folded until "scratch voice ▾"
+    tk.Label(_qlr2, text="scratch voice:", bg=C["panel"], fg=C["faint"], font=fsm).pack(side="left")
+    ql_gender = tk.StringVar(value="male")
+    _gm = tk.OptionMenu(_qlr2, ql_gender, "male", "female")
+    _gm.configure(bg=C["panel2"], fg=C["ink"], relief="flat", font=fsm, highlightthickness=0,
+                  borderwidth=0, width=7, anchor="w")
+    _gm["menu"].configure(bg=C["panel2"], fg="#000000", font=fsm)
+    _gm.pack(side="left", padx=4)
+    tk.Label(_qlr2, text="age", bg=C["panel"], fg=C["faint"], font=fsm).pack(side="left", padx=(8, 2))
+    ql_age = tk.Entry(_qlr2, width=4, bg="#100e0c", fg=C["ink"], relief="flat",
+                      font=fmono, insertbackground=C["ink"])
+    ql_age.insert(0, "30"); ql_age.pack(side="left")
+    tk.Label(_qlr2, text="accent", bg=C["panel"], fg=C["faint"], font=fsm).pack(side="left", padx=(8, 2))
+    ql_accent = tk.StringVar(value="\u2014 none \u2014")
+    _am = tk.OptionMenu(_qlr2, ql_accent, *[a for a, _w in dlg.ACCENTS])
+    _am.configure(bg=C["panel2"], fg=C["ink"], relief="flat", font=fsm, highlightthickness=0,
+                  borderwidth=0, width=22, anchor="w")
+    _am["menu"].configure(bg=C["panel2"], fg="#000000", font=fsm)
+    _am.pack(side="left", padx=4)
+    btn(_qlr2, "Save accent to voice", lambda: _ql_set_accent()).pack(side="left", padx=(8, 0))
+
+    def _ql_toggle(_e=None):
+        if _qlr2.winfo_manager():
+            _qlr2.pack_forget()
+            _ql_more.configure(text="scratch voice \u25be")
+        else:
+            _qlr2.pack(fill="x", padx=10, pady=(0, 8), after=_qlh)
+            _ql_more.configure(text="scratch voice \u25b4")
+    _ql_more.bind("<Button-1>", _ql_toggle)
+
+    # Row 3: WHAT YOU MADE. A one-shot sound you cannot replay is not a take: the clip has to
+    # stay visible and re-playable (Ryan, 2026-10-15: "i still dont see an option to listen to
+    # the quick line i generated").
+    _qlr3 = tk.Frame(qlf, bg=C["panel"]); _qlr3.pack(fill="x", padx=10, pady=(0, 8))
+    _ql_last = tk.Label(_qlr3, text="nothing yet - type a sentence and press SPEAK",
+                        bg=C["panel"], fg=C["faint"], font=fsm, justify="left",
+                        anchor="w", wraplength=1000)
+    _ql_last.pack(anchor="w")
+    _ql_hist = tk.Frame(_qlr3, bg=C["panel"]); _ql_hist.pack(anchor="w", pady=(4, 0))
+
+    def _ql_refill():
+        """Rebuild the voice menu from the bank - voices are MADE in CAST, so rescan on demand."""
+        m = ql_vmenu["menu"]; m.delete(0, "end")
+        for lab in [QL_SCRATCH] + [v.get("name", "?") for v in dlg.list_voices()]:
+            m.add_command(label=lab, command=lambda lab=lab: ql_voice.set(lab))
+        ql_voice.set(QL_SCRATCH)
+
+    def _ql_speak():
+        txt = (ql_txt.get() or "").strip()
+        if not txt:
+            say("type a sentence in QUICK LINE first", warn=True); return
+        lab = ql_voice.get()
+        if lab == QL_SCRATCH:
+            words = dict(dlg.ACCENTS).get(ql_accent.get(), "")
+            try:
+                age = int(ql_age.get() or 30)
+            except Exception:
+                age = 30
+            v = dlg.new_voice("Scratch \u2014 %s" % (ql_accent.get() or "voice").strip("\u2014 "),
+                              gender=ql_gender.get(), age_years=age, accent=words)
+        else:
+            v = None
+            for cand in dlg.list_voices():
+                if cand.get("name") == lab:
+                    v = cand; break
+            if v is None:
+                say("voice %r not found - press \u21bb to rescan" % lab, warn=True); return
+        # \u26a0\ufe0f DEDICATED mood key. Writing ref_text into "neutral" and auditioning would
+        # overwrite that voice's real reference sample (neutral.wav) with this sentence.
+        v.setdefault("moods", {})["quick"] = {"extra": "", "wav": "quick.wav", "ref_text": txt}
+        st["editing"] = v
+        say("designing \u201c%s\u2026\u201d in %s" % (txt[:32], v.get("name")))
+        st["ql_pending"] = {"text": txt, "voice": v.get("name")}
+        _start_tts_job("audition", v, "quick")
+
+    def _ql_takes():
+        return st.setdefault("ql_takes", [])
+
+    def _ql_play():
+        tk_ = _ql_takes()
+        if not tk_:
+            say("nothing to play yet - press SPEAK", warn=True); return
+        play_audio(tk_[0]["wav"])
+
+    def _ql_show():
+        """Name the clip on screen and give every recent one a PLAY button."""
+        tk_ = _ql_takes()
+        if not tk_:
+            _ql_last.configure(text="nothing yet - type a sentence and press SPEAK")
+            return
+        t0 = tk_[0]
+        _ql_last.configure(text="LAST:  %s   \u00b7   %s   \u00b7   \u201c%s\u2026\u201d"
+                                % (os.path.basename(t0.get("wav", "")), t0.get("voice", "?"),
+                                   (t0.get("text") or "")[:44]))
+        for w in _ql_hist.winfo_children():
+            w.destroy()
+        tk.Label(_ql_hist, text="replay:", bg=C["panel"], fg=C["faint"],
+                 font=fsm).pack(side="left")
+        for i2, t2 in enumerate(tk_):
+            btn(_ql_hist, "\u25b6 %d" % (i2 + 1),
+                lambda p=t2["wav"]: play_audio(p)).pack(side="left", padx=2)
+        btn(_ql_hist, "OPEN FOLDER", lambda: _open(dlg.voices_dir())).pack(side="left", padx=(8, 0))
+
+    def _ql_set_accent():
+        """Write the picked accent onto a BANKED voice - so an accent never needs its own step."""
+        lab = ql_voice.get()
+        if lab == QL_SCRATCH:
+            say("pick a saved voice (not scratch) to store an accent", warn=True); return
+        v = None
+        for cand in dlg.list_voices():
+            if cand.get("name") == lab:
+                v = cand; break
+        if v is None:
+            say("voice %r not found - press \u21bb" % lab, warn=True); return
+        if v.get("source") == "character":
+            say("character-pack voices are read-only - CAST \u2192 NEW VOICE to fork one",
+                warn=True); return
+        v["accent"] = dict(dlg.ACCENTS).get(ql_accent.get(), "")
+        try:
+            dlg.save_voice(v)
+        except Exception as exc:
+            say("could not save: %r" % exc, warn=True); return
+        say("accent saved for %s" % v.get("name"))
+
+    _ql_refill()
+
+
+    # Two columns (redesign): the SCRIPT on the left, CAST + LINES on the right, and MAKE as a
+    # bar pinned under the right column so it is always on screen.
+    cols = tk.Frame(body, bg=C["bg"])
+    cols.pack(fill="both", expand=True)
+    scol = tk.Frame(cols, bg=C["panel"], width=420, highlightthickness=1,
+                    highlightbackground=C["line"])
+    scol.pack(side="left", fill="y")
+    scol.pack_propagate(False)
+    rcol = tk.Frame(cols, bg=C["bg"])
+    rcol.pack(side="left", fill="both", expand=True, padx=(10, 0))
+    makebar = tk.Frame(rcol, bg=C["panel"], highlightthickness=1, highlightbackground=C["line"])
+    makebar.pack(side="bottom", fill="x", pady=(8, 0))
+    lp = tk.Frame(rcol, bg=C["bg"])
+    lp.pack(side="top", fill="both", expand=True)
     vsb = tk.Scrollbar(lp, orient="vertical")
     vsb.pack(side="right", fill="y")
     canvas = tk.Canvas(lp, bg=C["bg"], highlightthickness=0,
@@ -284,53 +538,98 @@ def open_dialogue(root, ctx):
     win.bind("<Button-5>", lambda e: _on_wheel(e))
 
     # ------------------------------------------------------------------ step scaffolding
-    def step_frame(n, title):
-        outer = tk.Frame(steps, bg=C["panel"], highlightthickness=1,
-                         highlightbackground=C["line"])
-        outer.pack(fill="x", pady=(0, 8))
+    def step_frame(n, title, parent=None, hint=""):
+        """A titled section. parent=None -> the scrolling right column; a parent (the script
+        column) -> fills it. The numbered chips went: left-to-right IS the order now."""
+        if parent is None:
+            outer = tk.Frame(steps, bg=C["panel"], highlightthickness=1,
+                             highlightbackground=C["line"])
+            outer.pack(fill="x", pady=(0, 8))
+        else:
+            outer = parent
         head = tk.Frame(outer, bg=C["panel"])
         head.pack(fill="x", padx=10, pady=(8, 2))
-        tk.Label(head, text=" %d " % n, bg=C["rust"], fg="#14110f",
-                 font=fh).pack(side="left")
-        tk.Label(head, text=title, bg=C["panel"], fg=C["ink"],
-                 font=fsm).pack(side="left", padx=8)
+        tk.Label(head, text=title, bg=C["panel"], fg=C["ink"], font=fh).pack(side="left")
+        if hint:
+            tk.Label(head, text=hint, bg=C["panel"], fg=C["faint"],
+                     font=fsm).pack(side="left", padx=8)
         b = tk.Frame(outer, bg=C["panel"])
-        b.pack(fill="x", padx=10, pady=(2, 10))
+        b.pack(fill="both", expand=parent is not None, padx=10, pady=(2, 10))
         return b
 
     # ===== 1 · SCRIPT ===================================================================
-    b1 = step_frame(1, "SCRIPT  — paste a script or open a file, then PARSE")
-    t_script = tk.Text(b1, height=11, width=66, wrap="word",
-                       bg="#100e0c", fg=C["ink"], relief="flat", font=fmono,
-                       padx=6, pady=4, insertbackground=C["ink"])
-    t_script.pack(anchor="w")
-
-    srow1 = tk.Frame(b1, bg=C["panel"])
-    srow1.pack(anchor="w", pady=(6, 0))
-    btn(srow1, "OPEN FILE\u2026",
-        lambda: _open_script()).pack(side="left")
-    btn(srow1, "PARSE",
-        lambda: _parse()).pack(side="left", padx=6)
-    btn(srow1, "WRITE DIALOGUE\u2026",
-        lambda: _write_dialogue()).pack(side="left", padx=6)
-    lint_lbl = lam(b1, "", fg=C["faint"], font=fmono)
-    lint_lbl.pack(anchor="w", pady=(2, 0))
-
+    b1 = step_frame(1, "Script", parent=scol, hint="lines update as you type")
     srow2 = tk.Frame(b1, bg=C["panel"])
-    srow2.pack(anchor="w", pady=(4, 0))
-    lam(srow2, "PROJECT").pack(side="left")
+    srow2.pack(side="bottom", fill="x", pady=(6, 0))
+    lam(srow2, "Project").pack(side="left")
     proj_var = tk.StringVar(value="\u2014 new \u2014")
     proj_picker = tk.OptionMenu(srow2, proj_var, "\u2014 new \u2014")
     proj_picker.configure(bg=C["panel2"], fg=C["ink"], relief="flat", font=fsm,
                           highlightthickness=0, activebackground=C["rust"],
-                          activeforeground="#fff", borderwidth=0, width=16,
+                          activeforeground="#fff", borderwidth=0, width=14,
                           anchor="w")
     proj_picker["menu"].configure(bg=C["panel2"], fg="#000000", font=fsm)
     proj_picker.pack(side="left", padx=6)
-    btn(srow2, "SAVE",
-        lambda: _save_project()).pack(side="left", padx=4)
-    btn(srow2, "NEW",
+    btn(srow2, "New",
         lambda: _new_project()).pack(side="left", padx=4)
+    saved_lbl = lam(srow2, "", fg=C["faint"])
+    saved_lbl.pack(side="left", padx=6)
+    srow1 = tk.Frame(b1, bg=C["panel"])
+    srow1.pack(side="bottom", fill="x", pady=(6, 0))
+    btn(srow1, "Write it for me\u2026",
+        lambda: _write_dialogue()).pack(side="left")
+    btn(srow1, "Open file\u2026",
+        lambda: _open_script()).pack(side="left", padx=6)
+    lint_lbl = lam(b1, "", fg=C["faint"], font=fsm, wraplength=380, justify="left",
+                   anchor="w")
+    lint_lbl.pack(side="bottom", fill="x", pady=(4, 0))
+    t_script = tk.Text(b1, height=11, width=40, wrap="word",
+                       bg="#100e0c", fg=C["ink"], relief="flat", font=fmono,
+                       padx=6, pady=4, insertbackground=C["ink"])
+    t_script.pack(fill="both", expand=True)
+    _ap = {"job": None}
+
+    def _script_typed(_e=None):
+        """Re-parse ~0.8 s after typing stops. Never while a render is running: a line that
+        changes under a running job would get the take meant for its old words."""
+        if _ap["job"]:
+            try:
+                win.after_cancel(_ap["job"])
+            except Exception:
+                pass
+        _ap["job"] = win.after(800, _auto_parse)
+
+    def _auto_parse():
+        _ap["job"] = None
+        text = t_script.get("1.0", "end").strip()
+        if not text or (st["pj"] is not None and text == (st["pj"].get("script") or "").strip()):
+            return
+        if st.get("busy"):
+            _ap["job"] = win.after(1500, _auto_parse)
+            return
+        _parse()
+    def _script_modified(_e=None):
+        # <<Modified>> fires for typing, paste, drag-drop and programmatic inserts alike
+        # (a <KeyRelease> binding misses all but the first); re-arm it every time.
+        if t_script.edit_modified():
+            t_script.edit_modified(False)
+            _script_typed()
+    t_script.bind("<<Modified>>", _script_modified)
+
+    def _autosave_project():
+        """Every change saves the project — no SAVE button to forget."""
+        if st["pj"] is None or st["pj"].get("_skip_save"):
+            return
+        try:
+            st["pj"]["script"] = t_script.get("1.0", "end").strip()
+            st["pj"]["gap_ms"] = int(gap_var.get())
+            dlg.save_project(st["pj"])
+        except Exception as exc:
+            say("could not save the project: %s" % str(exc)[:80], warn=True)
+            return
+        _rebuild_project_list()
+        proj_var.set(st["pj"]["slug"])
+        saved_lbl.configure(text="saved %s" % time.strftime("%H:%M"))
 
     def _rebuild_project_list():
         projs = dlg.list_projects()
@@ -431,6 +730,7 @@ def open_dialogue(root, ctx):
                 t_script.delete("1.0", "end")
                 t_script.insert("1.0", fh.read())
             say("loaded %s" % os.path.basename(path))
+            _parse()
         except Exception as exc:
             say("could not read: %r" % exc, warn=True)
 
@@ -441,12 +741,14 @@ def open_dialogue(root, ctx):
             return
         lines = dlg.parse_script(text)
         spkrs = dlg.speakers(lines)
-        say("PARSED: %d lines \u00b7 %d speakers: %s"
+        say("%d lines \u00b7 %d speakers: %s"
             % (len(lines), len(spkrs), " \u00b7 ".join(spkrs)))
         if st["pj"] is None:
+            # ⚠️ a UNIQUE name, never "untitled": saving is automatic now, and a shared default
+            # name is exactly how one script silently overwrote another.
             st["pj"] = dlg.new_project(
                 proj_var.get() if proj_var.get() != "\u2014 new \u2014"
-                else "untitled", text)
+                else time.strftime("scene %b %d %H%M%S").lower(), text)
         else:
             st["pj"] = dlg.reparse(st["pj"], text)
         _rebuild_project_list()
@@ -456,20 +758,24 @@ def open_dialogue(root, ctx):
             ws = dlg.lint_line(l["text"])
             if ws:
                 warnings.append("Line %d: %s" % (l["idx"], "; ".join(ws)))
+        found = "%d line%s \u00b7 %d speaker%s found" % (
+            len(lines), "" if len(lines) == 1 else "s", len(spkrs), "" if len(spkrs) == 1 else "s")
         if warnings:
-            lint_lbl.configure(text="lint: " + " | ".join(warnings[:3]),
-                               fg=RED)
+            lint_lbl.configure(text=found + "  \u00b7  check: " + " | ".join(warnings[:2]),
+                               fg=C["ochre"])
         else:
-            lint_lbl.configure(text="no lint warnings", fg=C["moss"])
+            lint_lbl.configure(text=found, fg=C["moss"])
         _refresh_cast()
+        if any(v.get() == "\u2014 none \u2014" for v in st["cast_vars"].values()):
+            _auto_cast(quiet=True)          # new speakers get a voice straight away if one fits
         _refresh_lines()
+        _sync_engine()
         _refresh_estimate()
+        _autosave_project()
 
     def _new_project():
-        name = _sd.askstring("New Project", "Project name:",
-                             initialvalue="") if not _driver else "test"
-        if not name:
-            return
+        # no pop-up: a new project is named by the clock; the script names itself in the menu
+        name = "test" if _driver else time.strftime("scene %b %d %H%M%S").lower()
         st["pj"] = {
             "name": name,
             "slug": dlg.slugify(name),
@@ -483,6 +789,7 @@ def open_dialogue(root, ctx):
         lint_lbl.configure(text="", fg=C["faint"])
         _refresh_cast()
         _refresh_lines()
+        _sync_engine()
         say("new project: %s" % name)
 
     def _save_project():
@@ -506,12 +813,17 @@ def open_dialogue(root, ctx):
         t_script.delete("1.0", "end")
         t_script.insert("1.0", p.get("script", ""))
         proj_var.set(slug)
+        try:
+            gap_var.set(int(p.get("gap_ms", 350)))     # GAP is saved with the project now
+        except Exception:
+            pass
         _refresh_cast()
         _refresh_lines()
+        _sync_engine()
         say("loaded %s (%d lines)" % (slug, len(p.get("lines", []))))
 
     # ===== 2 · CAST =====================================================================
-    b2 = step_frame(2, "CAST  \u2014 assign a voice to each speaker")
+    b2 = step_frame(2, "Cast", hint="a voice for each speaker")
     cast_frame = tk.Frame(b2, bg=C["panel"])
     cast_frame.pack(fill="x")
 
@@ -540,8 +852,14 @@ def open_dialogue(root, ctx):
             row = tk.Frame(cast_frame, bg=C["panel"])
             row.pack(fill="x", pady=2)
             lam(row, spk, fg=C["ink"], font=fh).pack(side="left", padx=(0, 8))
-            var = tk.StringVar(value=cast.get(spk, "\u2014 none \u2014"))
+            # ⚠️ The var holds a SLUG — plan_render() and EDIT look voices up by slug. A project
+            # saved by the old code may hold a display LABEL ("Avery  (bank)"): map it back.
+            _lab2slug = {l: s for s, l in voice_items}
+            _val = cast.get(spk, "\u2014 none \u2014")
+            var = tk.StringVar(value=_lab2slug.get(_val, _val))
             st["cast_vars"][spk] = var
+            if _lab2slug.get(_val, _val) != _val:
+                cast[spk] = _lab2slug[_val]
             menu = tk.OptionMenu(row, var,
                                  *[l for _, l in voice_items],
                                  command=lambda *a, s=spk: _cast_changed(s))
@@ -550,18 +868,36 @@ def open_dialogue(root, ctx):
                            activebackground=C["rust"], activeforeground="#fff",
                            borderwidth=0, width=16, anchor="w")
             menu["menu"].configure(bg=C["panel2"], fg="#000000", font=fsm)
+            # Each entry SHOWS the label but SETS the slug. tk.OptionMenu would set the label,
+            # which is how a hand-picked voice rendered as "no voice cast" (bug fixed 2026-10-17).
+            _mm = menu["menu"]
+            _mm.delete(0, "end")
+            for _slug, _lab in voice_items:
+                _mm.add_command(label=_lab, command=lambda v_=var, s_=_slug, sp=spk: (
+                    v_.set(s_), _cast_changed(sp)))
+            st["cast_menus"][spk] = menu
             menu.pack(side="left", padx=4)
-            btn(row, "NEW VOICE",
+            btn(row, "Design new",
                 lambda s=spk: _new_voice_for(s)).pack(side="left", padx=2)
-            btn(row, "EDIT",
+            btn(row, "Edit",
                 lambda s=spk: _edit_voice(
                     st["cast_vars"].get(s, tk.StringVar()).get())
                 ).pack(side="left", padx=2)
+            _need = lam(row, "needs a voice \u2014 pick one or Design new", fg=C["ochre"])
+
+            def _need_paint(*_a, v_=var, l_=_need):
+                if v_.get() == "\u2014 none \u2014":
+                    l_.pack(side="left", padx=8)
+                else:
+                    l_.pack_forget()
+            var.trace_add("write", _need_paint)
+            _need_paint()
             st["cast_rows"][spk] = row
 
     def _cast_changed(speaker):
         if st["pj"] is not None:
             st["pj"]["cast"] = {s: v.get() for s, v in st["cast_vars"].items()}
+            _autosave_project()
 
     def _new_voice_for(speaker):
         name = speaker.title() if speaker.isupper() else speaker
@@ -583,11 +919,12 @@ def open_dialogue(root, ctx):
 
     cast_ctl = tk.Frame(b2, bg=C["panel"])
     cast_ctl.pack(anchor="w", pady=(6, 0))
-    btn(cast_ctl, "AUTO-CAST", lambda: _auto_cast()).pack(side="left")
+    btn(cast_ctl, "Auto-cast", lambda: _auto_cast()).pack(side="left")
 
-    def _auto_cast():
+    def _auto_cast(quiet=False):
         if st["pj"] is None:
-            say("parse a script first", warn=True)
+            if not quiet:
+                say("type or paste a script first", warn=True)
             return
         spkrs = dlg.speakers(st["pj"].get("lines", []))
         all_v = dlg.list_voices()
@@ -598,8 +935,10 @@ def open_dialogue(root, ctx):
                 st["cast_vars"][spk].set(slug or "\u2014 none \u2014")
         if st["pj"] is not None:
             st["pj"]["cast"] = {s: v.get() for s, v in st["cast_vars"].items()}
-        say("auto-cast: %d speakers mapped" % len(auto))
+        if not quiet:
+            say("auto-cast: %d speakers mapped" % len(auto))
         _refresh_estimate()
+        _autosave_project()
 
     # ===== 3 · VOICE editor =============================================================
     _ew = {"win": None}      # editor window handle
@@ -968,16 +1307,17 @@ def open_dialogue(root, ctx):
         except Exception as exc:
             say("FX preview failed: %r" % exc, warn=True)
 
-    # ===== 4 · LINES ====================================================================
-    b4 = step_frame(4, "LINES  \u2014 review, redo, pick takes")
-    lf_inner = tk.Frame(b4, bg=C["panel"])
-    lf_inner.pack(fill="x")
+    # ===== 3 · LINES ====================================================================
+    b4 = step_frame(3, "Lines", hint="\u25b6 to listen \u00b7 Redo for another take")
     lf_vsb = tk.Scrollbar(b4, orient="vertical")
     lf_vsb.pack(side="right", fill="y")
     lf_canvas = tk.Canvas(b4, bg=C["panel"], highlightthickness=0,
-                           yscrollcommand=lf_vsb.set, height=240)
+                           yscrollcommand=lf_vsb.set, height=340)
     lf_canvas.pack(fill="both", expand=True)
     lf_vsb.configure(command=lf_canvas.yview)
+    # ⚠️ a CHILD of the canvas. It used to be a sibling created BEFORE the canvas, so the
+    # canvas stacked above it and hid every line — the table looked empty after PARSE.
+    lf_inner = tk.Frame(lf_canvas, bg=C["panel"])
     lf_canvas.create_window((0, 0), window=lf_inner, anchor="nw")
     lf_inner.bind("<Configure>",
                   lambda e: lf_canvas.configure(
@@ -999,21 +1339,23 @@ def open_dialogue(root, ctx):
         # Header
         hdr = tk.Frame(lf_inner, bg=C["panel"])
         hdr.pack(fill="x", pady=1)
-        for h, w in (("#", 2), ("SPEAKER", 10), ("LINE", 28), ("MOOD", 8),
+        for h, w in (("#", 2), ("WHO", 10), ("LINE", 34), ("MOOD", 8),
                      ("TAKES", 5), ("SCORE", 5)):
             tk.Label(hdr, text=h, bg=C["panel"], fg=C["faint"],
                      font=fsm, width=w, anchor="w").pack(side="left", padx=2)
         for li in pj_lines:
             lr = tk.Frame(lf_inner, bg=C["panel"])
             lr.pack(fill="x", pady=1)
-            tk.Label(lr, text=str(li["idx"]), bg=C["panel"], fg=C["muted"],
+            tk.Label(lr, text=str(li["idx"] + 1), bg=C["panel"], fg=C["muted"],
                      font=fsm, width=2).pack(side="left", padx=2)
             tk.Label(lr, text=dlg.normalise_speaker(li["speaker"]),
                      bg=C["panel"], fg=C["ink"], font=fsm, width=10,
                      anchor="w").pack(side="left", padx=2)
-            txt_lbl = tk.Label(lr, text=li["text"][:36] + ("\u2026" if len(
-                li["text"]) > 36 else ""),
-                bg=C["panel"], fg=C["ink"], font=fsm, anchor="w")
+            # the WHOLE line (it was cut at 36 characters), plus its error if the last try failed
+            _tx = li["text"] + (("\n\u26a0 " + str(li["error"])[:120]) if li.get("error") else "")
+            txt_lbl = tk.Label(lr, text=_tx, bg=C["panel"],
+                               fg=(RED if li.get("error") else C["ink"]), font=fsm, anchor="w",
+                               justify="left", wraplength=300, width=34)
             txt_lbl.pack(side="left", padx=2)
             txt_lbl.bind("<Button-1>",
                          lambda e, idx=li["idx"]: _edit_line_text(idx))
@@ -1052,7 +1394,7 @@ def open_dialogue(root, ctx):
             btn(lr, "\u25b6",
                 lambda idx=li["idx"]: _play_line(idx)).pack(side="left",
                                                             padx=2)
-            btn(lr, "REDO",
+            btn(lr, "Redo",
                 lambda idx=li["idx"]: _redo_line(idx)).pack(side="left",
                                                             padx=2)
             if len(takes) > 1:
@@ -1078,6 +1420,7 @@ def open_dialogue(root, ctx):
                     lines[idx]["sung"] = False
                     lines[idx]["mood"] = var.get()
                 _refresh_estimate()
+                _autosave_project()
     win.dialogue_set_line_mood = lambda idx, m: _line_mood_changed(
         idx, type("V", (), {"get": staticmethod(lambda: m)}))
 
@@ -1120,13 +1463,19 @@ def open_dialogue(root, ctx):
         if _driver and not _go:
             say("REDO skipped (driver mode)")
             return
-        say("line %d queued for new take \u2014 run RENDER MISSING" % idx)
-        # Mark the line to have its last take removed (redo)
+        # Drop the line's last take and make the new one RIGHT AWAY (it used to say "run
+        # RENDER MISSING" and leave the second click to you).
         lines = st["pj"].get("lines", [])
         if idx < len(lines) and lines[idx].get("takes"):
             lines[idx]["takes"] = lines[idx]["takes"][:-1]
             lines[idx]["kept"] = max(0, len(lines[idx]["takes"]) - 1)
         _refresh_lines()
+        if st.get("busy"):
+            say("line %d will be redone after the current job \u2014 Make the missing lines"
+                % idx, warn=True)
+            return
+        say("making a new take of line %d\u2026" % (idx + 1))
+        _start_tts_job("missing")
 
     def _pick_take(idx, delta):
         if st["pj"] is None:
@@ -1141,32 +1490,61 @@ def open_dialogue(root, ctx):
         n = max(0, min(len(takes) - 1, kept + delta))
         lines[idx]["kept"] = n
         _refresh_lines()
+        _autosave_project()
 
-    # ===== 5 · MAKE =====================================================================
-    b5 = step_frame(5, "MAKE  \u2014 render, transcribe, assemble scene")
-    mrow1 = tk.Frame(b5, bg=C["panel"])
+    # ===== 4 · MAKE =====================================================================
+    b5 = makebar
+    mk = tk.Frame(makebar, bg=C["panel"])
+    mk.pack(fill="x", padx=10, pady=10)
+    b_make = tk.Button(mk, text="Make the missing lines",
+                       command=lambda: _start_tts_job("missing"),
+                       bg=C["ochre"], fg="#14110f", activebackground="#d9b45e",
+                       activeforeground="#14110f", relief="flat", borderwidth=0, font=fh,
+                       padx=14, pady=8, highlightthickness=0)
+    b_make.pack(side="left")
+    btn(mk, "\u25b6 Play scene", lambda: _play_scene_auto()).pack(side="left", padx=8)
+    est_lbl = lam(mk, "", fg=C["faint"], font=fmono)
+    est_lbl.pack(side="left", padx=6)
+    _adv_lbl = tk.Label(mk, text="More \u25b8", bg=C["panel"], fg=C["ochre"], font=fsm,
+                        cursor="hand2")
+    _adv_lbl.pack(side="right")
+    adv = tk.Frame(makebar, bg=C["panel"])        # folded: engine, remake all, assemble, gap
+
+    def _adv_toggle(_e=None):
+        if adv.winfo_manager():
+            adv.pack_forget()
+            _adv_lbl.configure(text="More \u25b8")
+        else:
+            adv.pack(fill="x", padx=10, pady=(0, 10))
+            _adv_lbl.configure(text="Less \u25be")
+    _adv_lbl.bind("<Button-1>", _adv_toggle)
+
+    eng_row = tk.Frame(adv, bg=C["panel"])
+    eng_row.pack(anchor="w", pady=(0, 4))
+    lam(eng_row, "Voice engine").pack(side="left")
+    eng_menu = tk.OptionMenu(eng_row, eng_var, *[l for _k, l in dlg.ENGINES],
+                             command=_engine_changed)
+    eng_menu.configure(bg=C["panel2"], fg=C["ink"], relief="flat", font=fsm,
+                       highlightthickness=0, activebackground=C["rust"],
+                       activeforeground="#fff", borderwidth=0, width=16, anchor="w")
+    eng_menu["menu"].configure(bg=C["panel2"], fg="#000000", font=fsm)
+    eng_menu.pack(side="left", padx=6)
+    _eng_lbl["w"] = lam(eng_row, "", fg=C["faint"], font=fmono)
+    _eng_lbl["w"].pack(side="left", padx=4)
+    _engine_note()
+
+    mrow1 = tk.Frame(adv, bg=C["panel"])
     mrow1.pack(anchor="w", pady=2)
-    btn(mrow1, "RENDER MISSING",
-        lambda: _start_tts_job("missing")).pack(side="left")
-    btn(mrow1, "RENDER ALL",
-        lambda: _start_tts_job("all")).pack(side="left", padx=6)
-    btn(mrow1, "ESTIMATE",
-        lambda: _refresh_estimate()).pack(side="left", padx=6)
-    est_lbl = lam(b5, "", fg=C["faint"], font=fmono)
-    est_lbl.pack(anchor="w", pady=(2, 0))
-
-    assemble_row = tk.Frame(b5, bg=C["panel"])
-    assemble_row.pack(anchor="w", pady=(6, 0))
-    btn(assemble_row, "ASSEMBLE SCENE",
-        lambda: _assemble()).pack(side="left")
-    btn(assemble_row, "PLAY SCENE",
-        lambda: _play_scene()).pack(side="left", padx=6)
-    btn(assemble_row, "OPEN FOLDER",
+    btn(mrow1, "Remake every line",
+        lambda: _start_tts_job("all")).pack(side="left")
+    btn(mrow1, "Assemble scene",
+        lambda: _assemble()).pack(side="left", padx=6)
+    btn(mrow1, "Open folder",
         lambda: _open_scene_folder()).pack(side="left", padx=6)
 
-    gap_row = tk.Frame(b5, bg=C["panel"])
+    gap_row = tk.Frame(adv, bg=C["panel"])
     gap_row.pack(anchor="w", pady=(4, 0))
-    lam(gap_row, "GAP").pack(side="left")
+    lam(gap_row, "Gap").pack(side="left")
     gap_var = tk.IntVar(value=350)
     tk.Scale(gap_row, from_=0, to=1500, resolution=10, orient="horizontal",
              variable=gap_var, length=200, bg=C["panel"], fg=C["ink"],
@@ -1174,6 +1552,48 @@ def open_dialogue(root, ctx):
              activebackground=C["rust"], showvalue=True
              ).pack(side="left", padx=6)
     lam(gap_row, "ms between lines", fg=C["faint"]).pack(side="left", padx=6)
+    _gap_job = {"j": None}
+
+    def _gap_changed():
+        if _gap_job["j"]:
+            try:
+                win.after_cancel(_gap_job["j"])
+            except Exception:
+                pass
+        _gap_job["j"] = win.after(600, _autosave_project)
+    # a TRACE, not the Scale's -command: that only fires on some paths; the variable sees all
+    gap_var.trace_add("write", lambda *_a: _gap_changed())
+
+    def _scene_path():
+        return os.path.join(dlg.dialogue_dir(), (st["pj"] or {}).get("slug", "untitled"),
+                            "scene.wav")
+
+    def _scene_stale():
+        """The scene needs (re)building: missing, or older than a kept take or the project."""
+        sp_ = _scene_path()
+        if not os.path.exists(sp_):
+            return True
+        t_scene = os.path.getmtime(sp_)
+        pdir = os.path.dirname(sp_)
+        for li in (st["pj"] or {}).get("lines", []):
+            tks = li.get("takes", [])
+            k = li.get("kept", 0)
+            if tks and k < len(tks):
+                f_ = os.path.join(pdir, tks[k].get("file", ""))
+                if os.path.exists(f_) and os.path.getmtime(f_) > t_scene:
+                    return True
+        return st.get("scene_gap") != int(gap_var.get())
+
+    def _play_scene_auto():
+        """▶ Play scene builds the scene first whenever it is missing or stale — there is no
+        separate ASSEMBLE step to remember."""
+        if st["pj"] is None:
+            say("type or paste a script first", warn=True)
+            return
+        if _scene_stale():
+            _assemble()
+            st["scene_gap"] = int(gap_var.get())
+        _play_scene()
 
     def _refresh_estimate(*_a):
         if st["pj"] is None:
@@ -1181,39 +1601,28 @@ def open_dialogue(root, ctx):
             return
         lines = st["pj"].get("lines", [])
         n_lines = len(lines)
-        n_designs = 0
-        seen_keys = set()
-        for l in lines:
-            spk = dlg.normalise_speaker(l["speaker"])
-            cast_vs = st["pj"].get("cast", {})
-            slug = cast_vs.get(spk)
-            if not slug or slug == "\u2014 none \u2014":
-                continue
-            mood = l.get("mood") or "neutral"
-            key = "%s:%s" % (slug, mood)
-            if key in seen_keys:
-                continue
-            seen_keys.add(key)
-            all_v2 = dlg.list_voices()
-            found = None
-            for vv in all_v2:
-                if vv.get("slug") == slug:
-                    found = vv
-                    break
-            if found:
-                moods = found.get("moods", {})
-                m_d = moods.get(mood, {})
-                if not m_d.get("wav") or not os.path.exists(
-                        os.path.join(dlg.voices_dir(), slug,
-                                     m_d["wav"])):
-                    n_designs += 1
+        # ⚠️ The design count comes from plan_render() itself, not a second copy of the rule —
+        # a re-implemented count silently disagreed with what a render actually sends.
+        all_v = {v["slug"]: v for v in dlg.list_voices()}
+        eng = _engine_key()
+        designs, _job, _sk = plan_render(st["pj"], all_v, "all", eng)
+        n_designs = len(designs)
         n_sung = sum(1 for l in lines if dlg.is_sung(l))
-        est = dlg.estimate_seconds(n_lines - n_sung, n_designs)
+        est = dlg.estimate_seconds(n_lines - n_sung, n_designs, engine=eng)
         txt = "\u2248 %.0f s of GPU" % est
+        if eng != dlg.DEFAULT_ENGINE:
+            txt += "  (%s)" % dlg.engine_label(eng)
         if n_sung:
             sv = plan_sung(dict(st["pj"], lines=[dict(l, takes=[]) for l in lines]), {}, "all")
             txt += "  + \u2248 %.0f s YuE2 for %d sung" % (sung_estimate_seconds(sv), n_sung)
         est_lbl.configure(text=txt)
+        _n_miss = sum(1 for l in lines if not l.get("takes"))
+        try:
+            b_make.configure(text=("Make the %d missing line%s" % (_n_miss, "" if _n_miss == 1
+                                                                     else "s"))
+                             if _n_miss else "Every line has a take")
+        except Exception:
+            pass
 
     # ---- TTS job management ============================================================
     def _start_tts_job(mode, voice=None, mood=None):
@@ -1231,7 +1640,7 @@ def open_dialogue(root, ctx):
                 job["done"] = True
 
         job = {"done": False, "out": None, "err": None, "t0": time.time(),
-               "mode": mode, "progress": ""}
+               "mode": mode, "progress": "", "voice": voice, "mood": mood}
         st["busy"] = job
         say("starting TTS job (%s)\u2026" % mode)
         threading.Thread(target=_work, daemon=True).start()
@@ -1249,8 +1658,33 @@ def open_dialogue(root, ctx):
             job["err"] = str(exc)
             return
 
-        # Unload Director if resident (GPU1 needs room)
-        if os.environ.get("FORGE_LAB_NODIRECTOR") != "1":
+        # ROOM ON CARD 2 first (cards.py): frees an idle writer / idle ComfyUI by itself, and
+        # names whatever is WORKING there instead of letting the voice model die with an OOM.
+        try:
+            import cards as _cards
+        except Exception:
+            _cards = None
+        if _cards is not None and _cards.enabled():
+            _eng = (st.get("pj") or {}).get("engine") or dlg.DEFAULT_ENGINE
+            if mode == "audition":
+                _ek = "voice"
+            elif _eng == "drama3":
+                _ek = "drama3"          # needs BOTH cards: card 1 is its own
+            elif _eng == "fish":
+                _ek = "fish"
+            else:
+                _ek = "voice"
+            try:
+                _room = _cards.preflight(_ek, card=0 if _ek == "drama3" else 1)
+                if _room.get("freed"):
+                    job["progress"] = "freed card 2 (%s)" % ", ".join(_room["freed"])
+            except Exception as exc:
+                if type(exc).__name__ == "CardBusy":
+                    job["card_busy"] = exc
+                    return
+        # Unload Director if resident (GPU1 needs room) — the old path, when the card
+        # manager is off
+        elif os.environ.get("FORGE_LAB_NODIRECTOR") != "1":
             try:
                 import director as _dir
                 d = _dir.Director()
@@ -1315,7 +1749,10 @@ def open_dialogue(root, ctx):
                 job["out"] = dst
                 job["progress"] = "audition done for %s/%s" % (slug, mood)
                 # Play it
-                play_audio(dst)
+                # playback happens in _poll_tts, ON THE TK THREAD: this runs on a
+                # worker, and play_audio() calls say() (Tk). Off-thread Tk is why the
+                # clip played with nothing on screen confirming it.
+                job["out"] = dst
             else:
                 err = items[0].get("error", "no output") if items else "no items"
                 job["err"] = "design failed: %s" % err
@@ -1333,31 +1770,35 @@ def open_dialogue(root, ctx):
         yet, the design-output loop also swallowed line takes and wrote them over the voice's
         reference sample, and RENDER ALL re-designed every voice (a new "person" each click).
 
-        Now: (1) a DESIGN batch only for voice+mood samples that do not exist yet — RENDER ALL
-        never re-designs, a voice is changed only by AUDITION; (2) a CLONE batch keyed
-        "<slug>:<mood>"; (3) ASR on the new takes; (4) save. `plan_render()` is the pure part.
+        Now: (1) a DESIGN batch only for samples that do not exist yet — RENDER ALL
+        never re-designs, a voice is changed only by AUDITION; (2) a READING batch — keyed
+        "<slug>:<mood>" on qwen (a mood IS its own sample), keyed "<slug>" on fish (one
+        reference per voice, the mood rides in the text as an inline [tag]); (3) ASR on the new
+        takes; (4) save. `plan_render()` is the pure part. The DESIGN batch always goes to the
+        qwen rig, because fish has no VoiceDesign at all.
         """
         pj = st["pj"]
         if pj is None:
             job["err"] = "no project"
             return
+        eng = pj.get("engine") or dlg.DEFAULT_ENGINE
         all_v = {v["slug"]: v for v in dlg.list_voices()}
         proj_dir = os.path.join(dlg.dialogue_dir(), pj.get("slug", "untitled"))
         lines_dir = os.path.join(proj_dir, "lines")
         os.makedirs(lines_dir, exist_ok=True)
         from audio.client import tts_batch, transcribe_many
 
-        designs, _clones, skipped = plan_render(pj, all_v, mode)
+        designs, _clones, skipped = plan_render(pj, all_v, mode, eng)
         for msg in skipped:
             job["progress"] += "; " + msg
 
-        # (1) DESIGN the missing reference samples
+        # (1) DESIGN the missing reference samples — ALWAYS on the qwen rig (see plan_render)
         if designs:
             job["progress"] = "designing %d voice sample(s)" % len(designs)
             out_dir = tempfile.mkdtemp(prefix="forge-dlg-")
             try:
                 info = tts_batch({"design": designs, "clone": [], "voices": {},
-                                  "language": "English"}, out_dir)
+                                  "language": "English"}, out_dir, engine="qwen")
                 for item in info.get("items", []):
                     if "error" in item or not item.get("out"):
                         job["progress"] += "; design %s failed: %s" % (
@@ -1383,17 +1824,18 @@ def open_dialogue(root, ctx):
             finally:
                 shutil.rmtree(out_dir, ignore_errors=True)
 
-        # (2) CLONE every line that needs a take — re-planned now the samples exist
-        _d, clones, skipped2 = plan_render(pj, all_v, mode)
+        # (2) READ every line that needs a take — re-planned now the samples exist
+        _d, clones, skipped2 = plan_render(pj, all_v, mode, eng)
         for msg in skipped2:
             if msg not in skipped:
                 job["progress"] += "; " + msg
         new_takes = []
         if clones:
-            job["progress"] = "reading %d line(s)" % len(clones["clone"])
+            job["progress"] = "reading %d line(s) on %s" % (len(clones["clone"]),
+                                                            dlg.engine_label(eng))
             out_dir = tempfile.mkdtemp(prefix="forge-dlg-")
             try:
-                info = tts_batch(clones, out_dir)
+                info = tts_batch(clones, out_dir, engine=eng)
                 by_id = {c["id"]: c for c in clones["clone"]}
                 for item in info.get("items", []):
                     c = by_id.get(item.get("id"))
@@ -1463,12 +1905,50 @@ def open_dialogue(root, ctx):
             win.after(500, lambda: _poll_tts(job))
             return
         st["busy"] = None
+        try:
+            import cards as _cards
+            threading.Thread(target=_cards.release, args=("dialogue",), daemon=True).start()
+        except Exception:
+            _cards = None
+        if job.get("card_busy") is not None:
+            # card 2 is WORKING on something: say what, in words, and offer the choices
+            _cb = job["card_busy"]
+            say("%s is busy \u2014 choose what to do" % _cards.card_name(_cb.card), warn=True)
+            import cards_ui
+            cards_ui.handle(win, _cb, ctx, say=say, owner="dialogue",
+                            retry=lambda: _start_tts_job(job["mode"], job.get("voice"),
+                                                         job.get("mood")))
+            return
         if job["err"]:
-            say("TTS error: %s" % job["err"], warn=True)
+            # ⚠️ ONE readable sentence on screen; the rig's full traceback goes to the error
+            # log. A pasted traceback filled the whole window (2026-10-17, an OOM on card 2).
+            _full = str(job["err"])
+            try:
+                with open(os.path.join(DATA, "forge_lab_errors.log"), "a") as _lf:
+                    _lf.write("%s  dialogue TTS: %s\n" % (time.strftime("%Y-%m-%d %H:%M:%S"),
+                                                         _full))
+            except Exception:
+                pass
+            _short = _cards.explain(_full) if _cards is not None else _full[:200]
+            say("TTS error: %s" % _short, warn=True)
             return
         say("TTS done  %s" % job.get("progress", ""))
+        _qp = st.pop("ql_pending", None)
+        if job.get("mode") == "audition" and job.get("out"):
+            if _qp:
+                st.setdefault("ql_takes", []).insert(0, dict(_qp, wav=job["out"]))
+                del st["ql_takes"][8:]
+                _ql_show()
+            play_audio(job["out"])
         _refresh_lines()
         _refresh_estimate()
+        if job.get("mode") in ("missing", "all") and st["pj"] is not None:
+            _ls = st["pj"].get("lines", [])
+            if _ls and all(l.get("takes") for l in _ls):
+                _assemble()
+                st["scene_gap"] = int(gap_var.get())
+                say("every line has a take \u2014 the scene is ready: \u25b6 Play scene")
+            _autosave_project()
 
     def _assemble():
         if st["pj"] is None:
@@ -1585,6 +2065,10 @@ def open_dialogue(root, ctx):
             "busy": st["busy"] is not None,
             "status": status.cget("text") if status else "",
             "project": st["pj"]["slug"] if st["pj"] else None,
+            "engine": _engine_key(),
+            "engine_label": eng_var.get(),
+            "engine_note": _eng_lbl["w"].cget("text") if _eng_lbl.get("w") else "",
+            "project_engine": (st["pj"] or {}).get("engine"),
             "buttons": _all_button_labels(win),
         }
 
@@ -1606,6 +2090,13 @@ def open_dialogue(root, ctx):
         _parse()
     win.dialogue_parse = _do_parse
 
+    def _do_set_engine(key):
+        """Driver hook: pick a VOICE ENGINE the way a menu click does (label -> callback)."""
+        eng_var.set(dlg.engine_label(key))
+        _engine_changed()
+        return _engine_key()
+    win.dialogue_set_engine = _do_set_engine
+
     def _do_new_voice(name, spk):
         """Create a voice in the bank and assign it to speaker spk in the cast."""
         v = dlg.new_voice(name)
@@ -1626,6 +2117,17 @@ def open_dialogue(root, ctx):
         if spk in st["cast_vars"]:
             st["cast_vars"][spk].set(slug)
     win.dialogue_set_cast = _set_cast
+    # the speaker's real dropdown, so a driver can pick from it exactly as a click does
+    win.dialogue_cast_menu = lambda spk: st["cast_menus"].get(spk)
+    win.dialogue_project = lambda: st["pj"]
+    win.dialogue_refresh_cast = lambda: _refresh_cast()
+    win.dialogue_play_scene = lambda: _play_scene_auto()
+    win.dialogue_parts = {"script": t_script, "make": b_make, "makebar": makebar,
+                          "gap": gap_var, "lint": lint_lbl, "quick_row": _qlh,
+                          "quick_more": _qlr2, "cast_frame": cast_frame, "lines": lf_inner,
+                          "scene_path": _scene_path, "saved": saved_lbl,
+                          # TRY A LINE, for drivers (TESTCARDS)
+                          "quick_text": ql_txt, "quick_speak": _ql_speak, "status": status}
 
     def _drv_edit(slug):
         _edit_voice(slug)

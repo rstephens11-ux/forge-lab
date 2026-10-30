@@ -53,13 +53,13 @@ print("\nCHARACTERS · round trip")
 src = _fake_png(os.path.join(tmp, "src-still.png"))
 fl.write_character("ears",
                    {"name": "Ears", "prompt": "identity block", "seed": "12345",
-                    "lora": "character_lora_v2.safetensors", "lora_strength": "0.8"},
+                    "lora": "character_lora_v1.safetensors", "lora_strength": "0.8"},
                    still_src=src)
 meta = fl.read_character("ears")
 check(bool(meta), "read_character returns the saved dict")
 check(meta.get("prompt") == "identity block", "the identity prompt block round-trips")
 check(meta.get("seed") == "12345", "the seed round-trips")
-check(meta.get("lora") == "character_lora_v2.safetensors", "the LoRA name round-trips")
+check(meta.get("lora") == "character_lora_v1.safetensors", "the LoRA name round-trips")
 check(meta.get("lora_strength") == "0.8", "the LoRA strength round-trips")
 check(fl.list_characters() == [("ears", "Ears")], "list_characters reports (slug, name)")
 

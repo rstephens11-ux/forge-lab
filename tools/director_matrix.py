@@ -275,6 +275,31 @@ f = Fake([chat({"prompt": "<Picture 1> is the character. he turns to the window"
 d._post = f
 _p = d.polish("continue", engine="h3", video_mode="cont")
 check("<Picture" not in _p, "polish h3/cont strips the tag (%r)" % _p)
+_rule = f.calls[0][1]["messages"][-1]["content"]
+check("For the target video, at 0.00 seconds into the target video, <Picture 1> (from [Shot 1]) "
+      "is fully referenced." in _rule and "NOT the six Ref2VA sections" in _rule
+      and "integrated_multimodal_description" in _rule,
+      "cont is asked for MiniMax's I2VA format (first-frame line + three fields), not Ref2VA")
+check("For the target video, at 0.00 seconds" in D._ENGINE_NOTES
+      and "MiniMax T2VA" in D._ENGINE_NOTES and "same six sections" not in D._ENGINE_NOTES,
+      "the shot-list notes teach I2VA for continue and T2VA for establishing")
+f = Fake([chat({"prompt": "integrated_multimodal_description: [Shot 1] a wide street."})])
+d._post = f
+d.polish("a street", engine="h3", video_mode="t2v")
+_rule = f.calls[0][1]["messages"][-1]["content"]
+check("MiniMax T2VA" in _rule and "integrated_multimodal_description" in _rule
+      and "plain cinematic" not in _rule, "t2v is asked for MiniMax's T2VA three-field format")
+
+# polish r2v: the labels it puts on their own lines STAY on their own lines
+f = Fake([chat({"prompt": "subject_definitions: <Subject 1> is him in <Picture 1>. summary: "
+                          "[reference generation] A walk. retention_analysis: <Subject 1> "
+                          "(appears in [Shot 1]): fully_preserved - all. detailed_description: "
+                          "[Shot 1] He walks. overall_soundscape: Wind. non_diegetic_music: N/A"})])
+d._post = f
+_p = d.polish("walk", engine="h3", video_mode="r2v")
+check(all(("\n%s:" % s) in _p for s in ("summary", "retention_analysis", "detailed_description",
+                                        "overall_soundscape", "non_diegetic_music")),
+      "polish keeps every Ref2VA label on its own line (the whitespace pass used to re-inline them)")
 
 # qwen STILL: photo language is KEPT
 f = Fake([chat({"prompt": "portrait, 85mm lens, sharp focus, soft window light"})])
@@ -305,6 +330,13 @@ check(_neg.index(D.HOUSE_NEGATIVES.strip()) < _neg.index("overall_soundscape:"),
 check(_neg.index("detailed_description:") < _neg.index(D.HOUSE_NEGATIVES.strip()),
       "and after the detailed_description label")
 check(D.inject_negatives(_neg) == _neg, "inject_negatives is IDEMPOTENT (no double clause)")
+_t2va = ("integrated_multimodal_description: [Shot 1] He walks.\n\n"
+         "overall_soundscape: Wind.\n\nnon_diegetic_music: N/A")
+_tn = D.inject_negatives(_t2va)
+check(D.HOUSE_NEGATIVES.strip() in _tn
+      and _tn.index(D.HOUSE_NEGATIVES.strip()) < _tn.index("overall_soundscape:")
+      and _tn.endswith("non_diegetic_music: N/A"),
+      "in a T2VA / I2VA prompt the negatives go at the tail of the body, not after the music")
 check(D.missing_ref2va_sections(_neg) == [],
       "all six sections still present after injection (%s)" % D.missing_ref2va_sections(_neg))
 check(D.inject_negatives("he crosses the car park").endswith(D.HOUSE_NEGATIVES.strip()),
@@ -360,6 +392,13 @@ check("35mm film grain" not in _r and "digital sensor noise" in _r,
 check("No human speech and no voices." in _r,
       "the no-speech clause is APPENDED when the soundscape lacks it")
 
+_two = ("subject_definitions: <Subject 1> is him in <Picture 1>. <Subject 2> is the crowd.\n"
+        "summary: x\nretention_analysis: fully_preserved\n"
+        "detailed_description: [Shot 1] A phone shot.\noverall_soundscape: Wind.\n"
+        "non_diegetic_music: N/A")
+_tw = D._repair_seamless_prompt(_two)
+check("<Subject 2> (appears in [Shot 1]): weak_reference - " in _tw and "): reference -" not in _tw,
+      "a background subject gets a VISIBLE marker (weak_reference); 'reference' is audio-only")
 _good = ("retention_analysis: <Subject 1> (appears in [Shot 1]): fully_preserved - identity.\n"
          "detailed_description: [Shot 1] A phone shot.\n"
          "overall_soundscape: Wind, traffic. No human speech and no voices.\n")
@@ -403,7 +442,7 @@ _dup = ("subject_definitions: <Subject 1> is X in <Picture 1>: a man.\n"
         "summary: s\n"
         "retention_analysis: <Subject 1> (appears in [Shot 1]): fully_preserved - x\n"
         "detailed_description: fully_preserved;. No on-screen text, lettering, logos.\n"
-        "detailed_description: [Shot 1] " + ("A man conducts in the square with a crowd behind him. " * 30) + "\n"
+        "detailed_description: [Shot 1] " + ("Gustav conducts in the square with a crowd behind him. " * 30) + "\n"
         "overall_soundscape: Wind. No human speech and no voices.\n"
         "non_diegetic_music: N/A\n")
 check(D.seamless_dd_words(_dup) >= 150,
@@ -526,11 +565,11 @@ except D.DirectorError as exc:
 
 print("\nDIALOGUE SCHEMA · accept")
 GOOD_DIALOGUE = {
-    "title": "The Return",
+    "title": "The Parcel",
     "lines": [
-        {"speaker": "ALICE", "direction": "", "text": "Are you going to complain?"},
-        {"speaker": "BOB", "direction": "", "text": "To whom? It is an app."},
-        {"speaker": "ALICE", "direction": "holding the receipt", "text": "I'm writing them a letter."},
+        {"speaker": "AVERY", "direction": "", "text": "You will not complain?"},
+        {"speaker": "THOMAS", "direction": "", "text": "To who? It is a website."},
+        {"speaker": "AVERY", "direction": "picking up the invoice", "text": "I shall write them a letter."},
     ],
 }
 check(D.validate(GOOD_DIALOGUE, D.DIALOGUE_SCHEMA) == [],
@@ -545,64 +584,64 @@ check(any("required" in e for e in D.validate({}, D.DIALOGUE_SCHEMA)),
       "a bare object is rejected for missing 'title' and 'lines'")
 
 print("\nvalidate_dialogue · accept")
-check(D.validate_dialogue(GOOD_DIALOGUE, {"ALICE": "b", "BOB": "b"}) == [],
+check(D.validate_dialogue(GOOD_DIALOGUE, {"AVERY": "b", "THOMAS": "b"}) == [],
       "good dialogue passes with matching cast")
-check(D.validate_dialogue(GOOD_DIALOGUE, {"ALICE": "b", "BOB": "b", "CAROL": "b"}) == [],
+check(D.validate_dialogue(GOOD_DIALOGUE, {"AVERY": "b", "THOMAS": "b", "NATE": "b"}) == [],
       "passes even when 1 cast member is unused")
 
 print("\nvalidate_dialogue · reject")
-_short = {"title": "T", "lines": [{"speaker": "ALICE", "direction": "", "text": "Hi"}]}
-check(any("at least 2 lines" in e for e in D.validate_dialogue(_short, {"ALICE": "b"})),
+_short = {"title": "T", "lines": [{"speaker": "AVERY", "direction": "", "text": "Hi"}]}
+check(any("at least 2 lines" in e for e in D.validate_dialogue(_short, {"AVERY": "b"})),
       "a single line is rejected")
 _cast_miss = {"title": "T", "lines": [
-    {"speaker": "ALICE", "direction": "", "text": "Hi"},
-    {"speaker": "ZED", "direction": "", "text": "Hello back"},
+    {"speaker": "AVERY", "direction": "", "text": "Hi"},
+    {"speaker": "NATESH", "direction": "", "text": "Hello back"},
 ]}
-check(any("not in the cast" in e for e in D.validate_dialogue(_cast_miss, {"ALICE": "b"})),
+check(any("not in the cast" in e for e in D.validate_dialogue(_cast_miss, {"AVERY": "b"})),
       "a speaker not in the cast is rejected")
 _empty_text = {"title": "T", "lines": [
-    {"speaker": "ALICE", "direction": "", "text": ""},
-    {"speaker": "BOB", "direction": "", "text": "Hello"},
+    {"speaker": "AVERY", "direction": "", "text": ""},
+    {"speaker": "THOMAS", "direction": "", "text": "Hello"},
 ]}
-check(any("empty spoken" in e for e in D.validate_dialogue(_empty_text, {"ALICE": "b", "BOB": "b"})),
+check(any("empty spoken" in e for e in D.validate_dialogue(_empty_text, {"AVERY": "b", "THOMAS": "b"})),
       "a line with empty text is rejected")
 _digits = {"title": "T", "lines": [
-    {"speaker": "ALICE", "direction": "", "text": "It cost 30 dollars"},
-    {"speaker": "BOB", "direction": "", "text": "Hello"},
+    {"speaker": "AVERY", "direction": "", "text": "It cost 30 dollars"},
+    {"speaker": "THOMAS", "direction": "", "text": "Hello"},
 ]}
-check(any("digits" in e for e in D.validate_dialogue(_digits, {"ALICE": "b", "BOB": "b"})),
+check(any("digits" in e for e in D.validate_dialogue(_digits, {"AVERY": "b", "THOMAS": "b"})),
       "digits in spoken text are rejected")
 _stage = {"title": "T", "lines": [
-    {"speaker": "ALICE", "direction": "", "text": "I am (sighs) writing a letter"},
-    {"speaker": "BOB", "direction": "", "text": "Hello"},
+    {"speaker": "AVERY", "direction": "", "text": "I shall (sighs) write a letter"},
+    {"speaker": "THOMAS", "direction": "", "text": "Hello"},
 ]}
-errs = D.validate_dialogue(_stage, {"ALICE": "b", "BOB": "b"})
+errs = D.validate_dialogue(_stage, {"AVERY": "b", "THOMAS": "b"})
 check(any("stage directions" in e for e in errs),
       "parenthetical in text (%s) is rejected" % errs[:1])
 _stage2 = {"title": "T", "lines": [
-    {"speaker": "ALICE", "direction": "", "text": "[laughs] Write a letter"},
-    {"speaker": "BOB", "direction": "", "text": "Hello"},
+    {"speaker": "AVERY", "direction": "", "text": "[laughs] Write a letter"},
+    {"speaker": "THOMAS", "direction": "", "text": "Hello"},
 ]}
-errs = D.validate_dialogue(_stage2, {"ALICE": "b", "BOB": "b"})
+errs = D.validate_dialogue(_stage2, {"AVERY": "b", "THOMAS": "b"})
 check(any("stage directions" in e for e in errs),
       "bracketed cue in text (%s) is rejected" % errs[:1])
 _one_speaker = {"title": "T", "lines": [
-    {"speaker": "ALICE", "direction": "", "text": "Hi there"},
-    {"speaker": "ALICE", "direction": "", "text": "I said hi"},
+    {"speaker": "AVERY", "direction": "", "text": "Hi there"},
+    {"speaker": "AVERY", "direction": "", "text": "I said hi"},
 ]}
-check(any("distinct speakers" in e for e in D.validate_dialogue(_one_speaker, {"ALICE": "b", "BOB": "b"})),
+check(any("distinct speakers" in e for e in D.validate_dialogue(_one_speaker, {"AVERY": "b", "THOMAS": "b"})),
       "only 1 speaker with >= 2 in cast is rejected")
 
 print("\nformat_dialogue")
 _lines3 = [
-    {"speaker": "ALICE", "direction": "", "text": "Are you going to complain?"},
-    {"speaker": "BOB", "direction": "", "text": "To whom? It is an app."},
-    {"speaker": "ALICE", "direction": "holding the receipt", "text": "I'm writing them a letter."},
+    {"speaker": "AVERY", "direction": "", "text": "You will not complain?"},
+    {"speaker": "THOMAS", "direction": "", "text": "To who? It is a website."},
+    {"speaker": "AVERY", "direction": "picking up the invoice", "text": "I shall write them a letter."},
 ]
 _fmt = D.format_dialogue(_lines3)
-check("> **ALICE** \u2014 Are you going to complain?" in _fmt,
+check("> **AVERY** \u2014 You will not complain?" in _fmt,
       "format_dialogue starts with the bold-speaker line (%r)" % _fmt[:50])
-check("> **ALICE** \u2014 *(holding the receipt)* I'm writing" in _fmt,
+check("> **AVERY** \u2014 *(picking up the invoice)* I shall" in _fmt,
       "a line with a direction has the *(direction)* part")
 import dialogue as DI  # noqa: E402
 _parsed = DI.parse_script(_fmt)
@@ -617,15 +656,15 @@ for i, p in enumerate(_parsed):
 
 print("\nDIALOGUE \u00b7 Director call (model stubbed)")
 _seen = []
-_cast = {"ALICE": "b", "BOB": "b"}
+_cast = {"AVERY": "b", "THOMAS": "b"}
 _BAD_DLG = {"title": "T", "lines": [
-    {"speaker": "ALICE", "direction": "", "text": "Hi"},
-    {"speaker": "ALICE", "direction": "", "text": "Hello again"},
+    {"speaker": "AVERY", "direction": "", "text": "Hi"},
+    {"speaker": "AVERY", "direction": "", "text": "Hello again"},
 ]}
-_GOOD_DLG_RESP = {"title": "The Return", "lines": [
-    {"speaker": "ALICE", "direction": "", "text": "Are you going to complain?"},
-    {"speaker": "BOB", "direction": "", "text": "To whom? It is an app."},
-    {"speaker": "ALICE", "direction": "holding the receipt", "text": "I'm writing them a letter."},
+_GOOD_DLG_RESP = {"title": "The Parcel", "lines": [
+    {"speaker": "AVERY", "direction": "", "text": "You will not complain?"},
+    {"speaker": "THOMAS", "direction": "", "text": "To who? It is a website."},
+    {"speaker": "AVERY", "direction": "picking up the invoice", "text": "I shall write them a letter."},
 ]}
 
 def _dlg_stub(seq):
@@ -639,9 +678,9 @@ def _dlg_stub(seq):
 
 dd = D.Director()
 dd._post, _dc = _dlg_stub([_BAD_DLG, _GOOD_DLG_RESP])
-out = dd.dialogue("Alice tries to return a parcel", _cast)
+out = dd.dialogue("Avery tries to return a parcel", _cast)
 check(_dc["n"] == 2, "a bad first reply triggers exactly one retry (%d call(s))" % _dc["n"])
-check(out.get("title") == "The Return", "the retry output is what comes back (%r)" % out.get("title"))
+check(out.get("title") == "The Parcel", "the retry output is what comes back (%r)" % out.get("title"))
 check(len(out.get("lines", [])) == 3, "retry output has 3 lines")
 
 _seen.clear()
@@ -656,7 +695,7 @@ dd3._post, _dc3 = _dlg_stub([_GOOD_DLG_RESP])
 dd3.dialogue("x", _cast, seconds=5)
 _ask3 = _seen[-1]["messages"][-1]["content"]
 check("about 2 lines" in _ask3, "a 5 s dialogue asks for min 2 lines")
-check("ALICE" in _ask and "BOB" in _ask,
+check("AVERY" in _ask and "THOMAS" in _ask,
       "the cast names appear in the prompt")
 
 dd4 = D.Director()
@@ -676,6 +715,132 @@ dd5.dialogue("x", _cast)
 _retry_feedback = _seen[-1]["messages"][-1]["content"]
 check("REJECTED" in _retry_feedback and ("distinct speakers" in _retry_feedback or "speaker" in _retry_feedback),
       "the retry message names the validation problem (%r)" % _retry_feedback[:80])
+
+print("\nWRITER: provider + model (like Hermes)")
+_saved_env = {k: os.environ.get(k) for k in ("DIRECTOR_MODEL", "DIRECTOR_PROVIDER",
+                                              "FORGE_LAB_DATA", "ANTHROPIC_API_KEY",
+                                              "OPENROUTER_API_KEY")}
+for _k in _saved_env:
+    os.environ.pop(_k, None)
+_td = tempfile.mkdtemp()
+os.environ["FORGE_LAB_DATA"] = _td
+_S = os.path.join(_td, "settings.json")
+
+
+def _set(d):
+    with open(_S, "w") as _fh:
+        json.dump(d, _fh)
+
+
+check(D.chosen_writer() == {"provider": "ollama", "model": D.DEFAULT_MODEL,
+                            "base_url": D.DEFAULT_URL}, "no setting -> the rig's Qwen")
+_d0 = D.Director()
+check(_d0.provider == "ollama" and _d0.model == D.DEFAULT_MODEL and not _d0.is_cloud(),
+      "Director() with no setting is local")
+_set({"writer_model": "hermes4:14b"})
+check(D.Director().model == "hermes4:14b" and D.Director().provider == "ollama",
+      "an old writer_model setting still picks an Ollama model")
+_set({"writer": {"provider": "anthropic", "model": "claude-opus-5-5"}, "tabs": False})
+_da = D.Director()
+check(_da.provider == "anthropic" and _da.model == "claude-opus-5-5" and _da.is_cloud(),
+      "settings writer {anthropic, opus} -> a cloud Director")
+check(_da.base_url == "https://api.anthropic.com", "the provider's default URL is used")
+check(D.Director(model="x:1").provider == "ollama", "an explicit model is local (callers that pin one)")
+os.environ["DIRECTOR_PROVIDER"] = "openrouter"
+os.environ["DIRECTOR_MODEL"] = "some/model"
+_de = D.Director()
+check((_de.provider, _de.model) == ("openrouter", "some/model"), "env wins over settings")
+os.environ.pop("DIRECTOR_PROVIDER"); os.environ.pop("DIRECTOR_MODEL")
+_set({"writer": {"provider": "nonsense"}})
+check(D.Director().provider == "ollama", "an unknown provider falls back to the rig")
+_set({"writer": {"provider": "openrouter"}})
+check(D.Director().provider == "ollama", "a cloud provider with no model stays home")
+with open(_S, "w") as _fh:
+    _fh.write("{broken")
+check(D.chosen_writer()["provider"] == "ollama", "a broken settings.json -> the rig")
+
+# keys: env first, then writer_keys.json (0600), never settings.json
+check(D.writer_key("anthropic") == "", "no key anywhere -> ''")
+D.save_writer_key("anthropic", " sk-test ")
+check(D.writer_key("anthropic") == "sk-test", "a saved key is read back (trimmed)")
+check(oct(os.stat(D.keys_path()).st_mode & 0o777) == "0o600", "the keys file is 0600")
+check(os.path.dirname(D.keys_path()) == _td, "the keys file sits beside settings.json")
+os.environ["ANTHROPIC_API_KEY"] = "sk-env"
+check(D.writer_key("anthropic") == "sk-env", "$ANTHROPIC_API_KEY wins over the file")
+os.environ.pop("ANTHROPIC_API_KEY")
+
+# the cloud call: Anthropic shape, schema in the system prompt, reply mapped back
+_seen_http = []
+
+
+def _fake_http(url, body=None, headers=None, timeout=600):
+    _seen_http.append((url, body, headers))
+    if "anthropic" in url:
+        return {"content": [{"type": "text", "text": "```json\n{\"title\": \"T\"}\n```"}]}
+    return {"choices": [{"message": {"content": "{\"title\": \"T\"}"}}]}
+
+
+_orig_http = D._http_json
+D._http_json = _fake_http
+_SCH = {"type": "object", "required": ["title"], "properties": {"title": {"type": "string"}}}
+_set({"writer": {"provider": "anthropic", "model": "claude-opus-5-5"}})
+_da = D.Director()
+_da._post = lambda *a, **k: (_ for _ in ()).throw(AssertionError("must not touch Ollama"))
+_out = _da._chat("SYS", "write it", _SCH, images=["aGk="])
+check(_out == {"title": "T"}, "Anthropic reply (in a ```json fence) parses and validates")
+_u, _b, _h = _seen_http[-1]
+check(_u == "https://api.anthropic.com/v1/messages", "Anthropic: POST /v1/messages")
+check(_h.get("x-api-key") == "sk-test" and _h.get("anthropic-version"), "Anthropic auth headers")
+check(_b["model"] == "claude-opus-5-5" and "SYS" in _b["system"] and '"title"' in _b["system"],
+      "the system prompt carries the brief AND the schema")
+check(_b["messages"][0]["content"][0]["type"] == "image", "a vision frame goes as an image block")
+check(_da.load() == {"cloud": "anthropic"} and _da.unload() == {"cloud": "anthropic"}
+      and _da.is_loaded(), "load/unload/is_loaded never touch the rig for a cloud writer")
+
+_set({"writer": {"provider": "custom", "model": "local-llm", "base_url": "http://box:8000/v1/"}})
+_dc = D.Director()
+_dc._chat("SYS", "go", _SCH)
+check(_seen_http[-1][0] == "http://box:8000/v1/chat/completions",
+      "custom OpenAI-compatible URL -> /chat/completions (trailing slash handled)")
+check(_seen_http[-1][1]["messages"][0]["role"] == "system", "OpenAI shape: system message first")
+
+_set({"writer": {"provider": "openrouter", "model": "a/b"}})
+_dn = D.Director()
+try:
+    _dn._chat("SYS", "go", _SCH)
+    check(False, "a cloud provider with no key raises")
+except D.DirectorError as _exc:
+    check("no API key" in str(_exc), "a cloud provider with no key says so plainly")
+
+
+def _down(url, body=None, headers=None, timeout=600):
+    raise D.DirectorError("down")
+
+
+D._http_json = _down
+_set({"writer": {"provider": "anthropic", "model": "claude-opus-5-5"}})
+_df = D.Director()
+_local = Fake([chat({"title": "Local"})])
+_df._post = _local
+check(_df._chat("S", "u", _SCH) == {"title": "Local"} and _local.calls
+      and _local.calls[0][1]["model"] == D.FALLBACK_MODEL,
+      "a cloud outage falls back to the rig's small local model")
+D._http_json = _orig_http
+
+check(D.list_models("nope") == [D.DEFAULT_MODEL, D.FALLBACK_MODEL] or True, "list_models never raises")
+D._http_json = lambda url, body=None, headers=None, timeout=15: {"models": [
+    {"name": "qwen3.8:27b"}, {"name": "bge-m3:latest"}, {"name": "nomic-embed-text:latest"}]}
+check(D.list_models("ollama") == ["qwen3.8:27b"], "Ollama list drops the embedding models")
+D._http_json = lambda *a, **k: (_ for _ in ()).throw(D.DirectorError("x"))
+check(D.list_models("anthropic")[0] == "claude-opus-5-5", "offline -> the provider's suggestions")
+D._http_json = _orig_http
+check(D.brain_label("m", "anthropic") == "Anthropic (Claude) · m", "a plain label for the header")
+
+for _k, _v in _saved_env.items():
+    if _v is None:
+        os.environ.pop(_k, None)
+    else:
+        os.environ[_k] = _v
 
 print("\nPY COMPILE")
 import py_compile  # noqa: E402

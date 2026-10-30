@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Does LOCAL H3 actually do audio-driven lip-sync?
 
-Built on the app's PROVEN h3_graph() (r2v, Alice-capable, 24 fps, native audio) with one
+Built on the app's PROVEN h3_graph() (r2v, Avery-capable, 24 fps, native audio) with one
 injection: `MiniMaxH3AddGuide`, whose own description is
 
     "Anchor an image, a short clip, audio, or a clip with its soundtrack at any frame of a

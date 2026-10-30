@@ -87,9 +87,9 @@ check(fl.filter_takes([], "All") == [], "empty in, empty out")
 check(fl.filter_takes(None, "All") == [], "None in, empty out")
 
 # ---------------------------------------------------------------- take_lineage
-check(fl.take_lineage({"character": "alice", "project": "ep7", "shot": 3})
-      == "from: alice · ep7 · shot 3", "lineage renders character · project · shot N")
-check(fl.take_lineage({"character": "alice"}) == "from: alice",
+check(fl.take_lineage({"character": "avery", "project": "ep7", "shot": 3})
+      == "from: avery · ep7 · shot 3", "lineage renders character · project · shot N")
+check(fl.take_lineage({"character": "avery"}) == "from: avery",
       "lineage with only a character")
 check(fl.take_lineage({"project": "ep7"}) == "from: ep7", "lineage with only a project")
 check(fl.take_lineage({"shot": 0}) == "from: shot 0", "shot 0 is a real shot, not missing")

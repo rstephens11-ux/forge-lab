@@ -119,6 +119,42 @@ MOOD_WORDS = {
     "drunk": "tipsy, slurring slightly, loose and loud",
 }
 
+# --------------------------------------------------------------------------- voice engines
+# Which model reads a spoken line. The two are NOT interchangeable:
+#
+#   qwen — Qwen3-TTS. VoiceDesign makes a voice from a DESCRIPTION; Base clones it per line.
+#          Its clone has NO emotion control, so a "mood" here is a SEPARATELY DESIGNED
+#          reference sample (`voices/<slug>/<mood>.wav`).
+#   fish — Fish Audio S2-Pro. Clone only, but a mood is an INLINE `[tag]` in the text, so ONE
+#          reference per voice is enough and per-mood samples are never needed. It has no
+#          VoiceDesign at all, so voice references are still MADE by qwen — the engine choice
+#          governs how LINES are read, not how voices are made.
+#   drama3 — Fish Drama 3 (35B MoE) INT4, served by SGLang-Omni on the rig's two cards. Same
+#          inline-[tag] shape as fish and no VoiceDesign, so it reuses fish_tag/fish_line_text
+#          and the "<slug>" voices key. Why the int4 checkpoint: the bf16/FP8 one cannot load on
+#          the 3090s at all (FP8 experts need SM89+; it dequantizes to ~70 GB and OOMs,
+#          measured 2026-10-14). The int4 one fits the two cards and runs ~0.9x realtime.
+#          ⚠️ It is a RESIDENT SERVER, not a one-shot load, and it owns card 1 while it runs.
+ENGINES = (
+    ("qwen", "Qwen3-TTS"),
+    ("fish", "Fish S2-Pro"),
+    ("drama3", "Drama 3 (int4)"),
+)
+DEFAULT_ENGINE = "qwen"
+
+
+def engine_label(name):
+    """Display label for an engine key (falls back to the default's label)."""
+    for key, label in ENGINES:
+        if key == name:
+            return label
+    return ENGINES[0][1]
+
+
+def is_engine(name):
+    return any(key == name for key, _ in ENGINES)
+
+
 # ACCENT presets — the ACCENT box stays free text; these just fill it. The model follows accent
 # words APPROXIMATELY: always AUDITION, and believe your ears over the label.
 # ⚠️ "Old English" literally = Anglo-Saxon (unintelligible to a modern listener, and the model
@@ -127,12 +163,12 @@ ACCENTS = [
     ("— none —", ""),
     ("Old English (archaic, Shakespearean)", "old-fashioned archaic English, Early Modern, theatrical Shakespearean"),
     ("18th-c. English gentleman", "18th-century English gentleman, refined upper-class Georgian"),
-    # ⚠️ Ryan, 2026-10-12: "the proper accent of george washington, an early american gentleman
+    # ⚠️ Ryan, 2026-10-12: "the proper accent of an early american gentleman
     # accent". No recording exists; this is the scholarly reconstruction of 1750s Virginia
     # Tidewater gentry speech: RHOTIC (the r's are said — NOT posh British RP, which dropped
     # them later), roots in West Country / Southern English, softened toward the Southern
-    # American that grew from it; formal, measured, educated.
-    ("Early American gentleman (George Washington)",
+    # American that grew from it; formal, measured, educated. The default character voice.
+    ("Early American gentleman (Avery Stone)",
      "early American gentleman, 1750s Virginia Tidewater gentry, rhotic with the r's pronounced, "
      "old West Country English roots softened toward a gentle Southern lilt, refined, measured "
      "and formal, not British RP"),
@@ -228,7 +264,7 @@ PASS_SCORE = 0.85
 #   design 1 voice = 12.68 s (gen 3.98)  ·  clone 3 short lines = 11.01 s (gen 3.78)  ·  ASR 3 = 8.50 s
 # The fixed terms are ssh + scp + model load. PER_LINE_S is padded above the measured 1.26 s
 # because those were 2-7 word lines; a real script line runs several seconds of speech.
-# Re-measured on a teaser script (9 real lines, 54 s of speech): clone 47.0 s wall,
+# Re-measured on the 105 teaser (9 real script lines, 54 s of speech): clone 47.0 s wall,
 # design x4 17.8 s, ASR x9 10.9 s. Real lines are LONG — the per-line term is what moved.
 LOAD_S = 7.2               # clone batch fixed cost
 PER_LINE_S = 4.4           # per cloned line (real script lines, ~6 s of speech each)
@@ -237,6 +273,28 @@ PER_DESIGN_S = 2.4         # per designed reference sample (17.8 s for 4 incl. l
 ASR_LOAD_S = 6.0           # ASR batch fixed cost
 PER_ASR_S = 1.0            # per line transcribed
 
+# FISH (S2-Pro) — MEASURED on forge GPU1, 2026-10-14, one-shot rig_fish.py (Mac wall incl ssh/scp).
+# ⚠️ Its LOAD is 5x Qwen's: S2-Pro is a 5B model and each render pays to build it from disk
+# (no resident server — that would sit on 20.5 GB of GPU1 and fight ComfyUI/Ollama).
+#   load: 38.38 / 38.71 / 38.4 s across three runs  ·  RTF 0.95-1.10
+#   7.62 s of speech generated in 7.27 s · 2.23 s in 2.28 s · 1.02 s in 1.13 s
+# So the per-line term tracks SPEECH LENGTH, not a fixed cost: ~1.0x realtime. A real script
+# line runs ~6 s of speech (the same assumption PER_LINE_S is built on).
+FISH_LOAD_S = 38.5
+FISH_PER_LINE_S = 6.0
+
+# DRAMA 3 (int4 / SGLang-Omni) — MEASURED on forge 2026-10-21 (2x3090, CUDA graphs off, Mac wall
+# incl. ssh/scp). TWO cost shapes, because it is a server rather than a one-shot load:
+#   * ALREADY RUNNING: no load at all — 5.9 s of speech in 5.1 s, 16.25 s in 14.7 s (~0.9x RTF).
+#     The per-line term is therefore ~1.0x the speech length, like fish.
+#   * COLD: the script starts the server and waits for /v1/models — 90-130 s (weights 20.8 GB
+#     off the NVMe; the int4 Marlin kernel is JIT-cached after the first ever start), then stops
+#     it again (~5 s) to give card 1 back. That cold start is a BATCH cost, paid once.
+# Estimate the cold shape: a Forge Lab batch always starts from a stopped server, because
+# nothing else may hold card 1 between runs.
+DRAMA3_LOAD_S = 120.0
+DRAMA3_PER_LINE_S = 6.0
+
 
 # --------------------------------------------------------------------------- parse_script
 
@@ -244,11 +302,11 @@ def parse_script(text):
     """Parse a script into list of {idx, speaker, direction, text} dicts.
 
     Accepts these formats (any separator: em-dash, en-dash, ` - `, `:`):
-      `> **ALICE** — *(dir)* text`
-      `**ALICE** — text`
-      `ALICE: text`
-      `ALICE (V.O.): text`
-      `ALICE — text`
+      `> **AVERY** — *(dir)* text`
+      `**AVERY** — text`
+      `AVERY: text`
+      `AVERY (V.O.): text`
+      `AVERY — text`
 
     Non-dialogue lines (actions, headings, ``---``, TITLE CARD) are skipped.
     Direction `*(…)*` or `(…)` at the START of text is moved to `direction`;
@@ -441,7 +499,10 @@ def slugify(name):
 
 # --------------------------------------------------------------------------- compose_description
 
-_STARTS_WITH_VOWEL = re.compile(r"^[aeiou]", re.I)
+_STARTS_WITH_VOWEL = re.compile(r"^([aeiou]|8|11-|18-)", re.I)   # "An 8-year-old"
+# accent words that already say how strong it is -- don't stack "strong" on top of them
+_ACCENT_STRENGTH = re.compile(r"\b(slight|slightly|mild|mildly|light|faint|subtle|soft|"
+                              r"gentle|hint|trace|thick|heavy|strong|broad|pronounced)\b", re.I)
 
 
 def compose_description(voice, mood="neutral"):
@@ -461,9 +522,19 @@ def compose_description(voice, mood="neutral"):
     core = "%d-year-old %s voice" % (age, gender)
     parts.append(core)
 
-    # Accent
+    # Accent -- Ryan 2026-10-21: "the accent is not working, it all sounds like plain
+    # english". VoiceDesign leans hard toward standard American English and treats a bare
+    # "Scottish accent" buried mid-list as optional. So the accent comes straight after the
+    # core, said strongly (unless the words already say how strong), and a closing sentence
+    # names the language it is spoken in -- Qwen's own examples read "a thick French accent
+    # speaking English".
     accent = (voice.get("accent") or "").strip()
-    if accent:
+    strong_accent = accent and accent.lower() not in ("neutral", "none", "no", "standard")
+    told_strength = bool(_ACCENT_STRENGTH.search(accent))
+    if strong_accent:
+        parts[0] += " with a %s%s accent" % ("" if told_strength else "strong, unmistakable ",
+                                            accent)
+    elif accent:
         parts.append(accent + " accent")
 
     # Slider phrases (non-zero only, in SLIDERS order)
@@ -494,6 +565,16 @@ def compose_description(voice, mood="neutral"):
         article = "A"
 
     result = "%s %s." % (article, body)
+    if strong_accent:
+        who = {"female": "She", "male": "He"}.get(gender, "They")
+        lang = (voice.get("language") or "English").strip() or "English"
+        if told_strength:
+            result += " %s speak%s %s with that %s accent on every word." % (
+                who, "" if who == "They" else "s", lang, accent)
+        else:
+            result += " %s speak%s %s with a heavy %s accent, clearly audible on every " \
+                      "word, never neutral standard %s." % (
+                          who, "" if who == "They" else "s", lang, accent, lang)
     # Single period at the end; remove any double periods
     result = result.replace("..", ".")
     return result
@@ -542,6 +623,28 @@ def mood_of(direction, available):
         if any(re.search(r"\b" + re.escape(kw), d) for kw in keywords):
             return mood
     return "neutral"
+
+
+# --------------------------------------------------------------------------- fish (S2-Pro)
+# S2-Pro takes FREE-FORM instructions in square brackets, inline in the text — `[whisper]`,
+# `[angry]`, `[professional broadcast tone]`. There is no fixed vocabulary to validate against.
+# These reuse MOOD_WORDS (the same vocabulary VoiceDesign composes from) so the two engines
+# cannot drift apart; MEASURED on forge 2026-10-14: `[whisper]` came back at half the level of
+# the untagged take (RMS 0.043 vs 0.087) and `[angry]` differed again — the tags are real.
+
+def fish_tag(mood):
+    """The inline instruction S2-Pro reads for `mood`. ``""`` for neutral (no tag)."""
+    return "[%s]" % MOOD_WORDS[mood] if MOOD_WORDS.get(mood) else ""
+
+
+def fish_line_text(mood, text, direction=""):
+    """One line's text as S2-Pro should receive it: the tag in front, words untouched.
+    `direction` is the VOICE's own standing delivery note (voices page: "Fish direction",
+    e.g. "slow, deadpan, slightly bored") — it goes in the same bracket, before the mood."""
+    d = (direction or "").strip().strip("[]").strip()
+    m = MOOD_WORDS.get(mood) or ""
+    inner = "; ".join(x for x in (d, m) if x)
+    return ("[%s] %s" % (inner, text)).strip() if inner else text
 
 
 # --------------------------------------------------------------------------- voice CRUD
@@ -811,6 +914,11 @@ def reparse(p, script):
         if old is not None:
             l["takes"] = old.get("takes", [])
             l["kept"] = old.get("kept", 0)
+            # ⚠️ and the choices made in the LINES table. The window re-parses as you type, so
+            # without this every keystroke in the script reset a line's mood / sung choice.
+            for _k in ("mood", "sung"):
+                if _k in old:
+                    l[_k] = old[_k]
         else:
             l.setdefault("takes", [])
             l.setdefault("kept", 0)
@@ -1043,20 +1151,25 @@ def score(intended, heard):
 
 # --------------------------------------------------------------------------- estimate_seconds
 
-def estimate_seconds(n_lines, n_designs=0, asr=True):
+def estimate_seconds(n_lines, n_designs=0, asr=True, engine=DEFAULT_ENGINE):
     """Estimated wall-clock seconds for a dialogue batch.
 
-    Constants are placeholders from Phase A; replace with live measurements
-    from Phase B before shipping.
+    Constants are MEASURED live on forge (see the block above each); `n_designs` always runs
+    on the qwen rig, because only VoiceDesign can make a voice from a description.
     """
     total = 0.0
 
-    # VoiceDesign batch (if any new voice designs needed)
+    # VoiceDesign batch (if any new voice designs needed) — always the qwen path
     if n_designs > 0:
         total += DESIGN_LOAD_S + PER_DESIGN_S * n_designs
 
     # TTS generation (all lines)
-    total += LOAD_S + PER_LINE_S * n_lines
+    if engine == "drama3":
+        total += DRAMA3_LOAD_S + DRAMA3_PER_LINE_S * n_lines
+    elif engine == "fish":
+        total += FISH_LOAD_S + FISH_PER_LINE_S * n_lines
+    else:
+        total += LOAD_S + PER_LINE_S * n_lines
 
     # ASR pass
     if asr and n_lines > 0:

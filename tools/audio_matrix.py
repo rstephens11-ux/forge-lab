@@ -327,18 +327,18 @@ def main():
     client._DEPLOYED = True
 
     # Create a ref wav for voice key
-    ref_wav_b = os.path.join(client.tempfile.gettempdir(), "audio_matrix_alice.wav")
+    ref_wav_b = os.path.join(client.tempfile.gettempdir(), "audio_matrix_avery.wav")
     with open(ref_wav_b, "wb") as f:
-        f.write(b"RIFFalice")
+        f.write(b"RIFFavery")
     out_dir_b = os.path.join(client.tempfile.gettempdir(), "audio_matrix_batch_out")
     os.makedirs(out_dir_b, exist_ok=True)
 
     batch_job = {
         "design": [{"id": "d1", "instruct": "A 40-year-old male voice",
                      "text": "Hello.", "out": "d1.wav"}],
-        "clone": [{"id": "c1", "voice": "alice", "text": "Good morning.",
+        "clone": [{"id": "c1", "voice": "avery", "text": "Good morning.",
                     "out": "c1.wav"}],
-        "voices": {"alice": {"ref_wav": ref_wav_b, "ref_text": "A reference."}},
+        "voices": {"avery": {"ref_wav": ref_wav_b, "ref_text": "A reference."}},
         "language": "English",
     }
     rig_items_b = [
@@ -352,14 +352,14 @@ def main():
     result_b = client.tts_batch(batch_job, out_dir_b)
     check(result_b.get("ok") is True, "tts_batch returns ok=True")
 
-    # Check ref wav was scp'd up (look for alice.wav in any scp arg)
+    # Check ref wav was scp'd up (look for avery.wav in any scp arg)
     all_scp_args_b = " ".join(" ".join(c) for c in fs5.scp_calls())
-    check("alice.wav" in all_scp_args_b or "audio_matrix_alice" in all_scp_args_b,
+    check("avery.wav" in all_scp_args_b or "audio_matrix_avery" in all_scp_args_b,
           "tts_batch scp's ref wav up to job dir (basename only)")
 
     # The CALLER's job is never rewritten (it is the UI's live plan), and the UPLOADED name is a
     # bare job-dir name (no absolute Mac path can reach the rig's job.json).
-    rw = batch_job["voices"]["alice"]["ref_wav"]
+    rw = batch_job["voices"]["avery"]["ref_wav"]
     check(rw == ref_wav_b, "tts_batch leaves the caller's job untouched (%r)" % rw)
     up_dests = [c[-1].split(":", 1)[1] for c in fs5.scp_calls()
                 if len(c) >= 4 and ":" in c[-1] and c[-2].endswith(".wav")]
@@ -375,10 +375,10 @@ def main():
         with open(os.path.join(d, "neutral.wav"), "wb") as f:
             f.write(b"RIFF" + d.encode())
     two_job = {"design": [], "clone": [
-        {"id": "l0", "voice": "alice:neutral", "text": "Hooray.", "out": "l0.wav"},
-        {"id": "l1", "voice": "bob:neutral", "text": "Sure.", "out": "l1.wav"}],
-        "voices": {"alice:neutral": {"ref_wav": os.path.join(d_a, "neutral.wav"), "ref_text": "a"},
-                   "bob:neutral": {"ref_wav": os.path.join(d_b, "neutral.wav"), "ref_text": "b"}}}
+        {"id": "l0", "voice": "avery:neutral", "text": "Huzzah.", "out": "l0.wav"},
+        {"id": "l1", "voice": "thomas:neutral", "text": "Sure.", "out": "l1.wav"}],
+        "voices": {"avery:neutral": {"ref_wav": os.path.join(d_a, "neutral.wav"), "ref_text": "a"},
+                   "thomas:neutral": {"ref_wav": os.path.join(d_b, "neutral.wav"), "ref_text": "b"}}}
     fs6.rig_stdout = json.dumps({"ok": True, "items": [], "seconds": 1.0})
     client.tts_batch(two_job, out_dir_b)
     names = [c[-1].rsplit("/", 1)[-1] for c in fs6.scp_calls()
@@ -406,9 +406,9 @@ def main():
     client.subprocess.run = fs6.run
     client._DEPLOYED = True
     batch_with_err = {
-        "clone": [{"id": "bad1", "voice": "alice", "text": "Oops.",
+        "clone": [{"id": "bad1", "voice": "avery", "text": "Oops.",
                     "out": "b.wav"}],
-        "voices": {"alice": {"ref_wav": ref_wav_b, "ref_text": ""}},
+        "voices": {"avery": {"ref_wav": ref_wav_b, "ref_text": ""}},
     }
     fs6.rig_stdout = json.dumps({
         "ok": True,
