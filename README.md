@@ -84,6 +84,30 @@ locally on the 3090s.
 - **Not included:** my creative projects (characters, episodes, scripts), generated media, my
   working notes, and the git history. Test fixtures use a generic placeholder cast.
 
+## Running it
+
+No virtualenv and no requirements file — the app is Python's standard library plus Tk.
+
+```sh
+brew install python@3.14 python-tk@3.14      # Tk 9; the system Python ships Tk 8.5, which has no PNG support
+export FORGE_LAB_DATA="$HOME/forge-lab"     # where characters, takes and episodes are written
+/opt/homebrew/bin/python3 forge_lab.py
+```
+
+It launches with **no rig reachable**: the window opens and the queue simply has nowhere to
+dispatch to. To point it at a ComfyUI box, set the host and prove the route:
+
+```sh
+export FORGE_SSH="you@your-rig"             # defaults to name@forge
+/opt/homebrew/bin/python3 forge_lab.py --selftest
+```
+
+`--selftest` resolves the rig, writes a small PNG with the standard library, and submits one tiny
+edit job through the same code path the app uses — so it fails loudly if the route is wrong.
+
+Every call goes through ComfyUI's own HTTP API. `comfy_route.py` speaks **Comfy API v2** via
+`comfy-api-proxy`, which sits in front of each card slot (ComfyUI `:8188` → proxy `:8288`).
+
 ## Running the tests
 
 ```sh
